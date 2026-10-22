@@ -5,6 +5,8 @@ its audio and screen frames, with captions, muxed with ffmpeg.
     python3 tools/make_tour.py [out.mp4]                 the full tour (default build/tour/hollow_saint_tour.mp4)
     python3 tools/make_tour.py --features [out.mp4]      0.7.0: Lo-Fi Relic, Crank & Tremor, then the 8 presets
                                                          (default build/tour/hollow_saint_0.7.0_features.mp4)
+    python3 tools/make_tour.py --demo [out.mp4]          the engine and its knobs, then both of the above
+                                                         (default build/tour/hollow_saint_0.7.0_demo.mp4)
 
 What it is: the engine's own C code rendering audio on a PC, and its own screen code moving the SVG's nodes, drawn by
 tools/render_screen.py's rasteriser. Not an OP-1 recording: no OP-1 FX, the stock envelope is approximated and the
@@ -61,51 +63,45 @@ class Script:
         self.at(t, 'on', n, vel); self.at(t + dur, 'off', n)
 
 
-def performance():
-    S = Script()
-    hs = P.PRESETS[0]
-    S.at(0, 'bpm', 96)
-    S.preset(0, hs)
-    S.at(0, 'caption', '')
-    # 0: title over a held D and a slow phrase
-    S.note(0.4, 50, 9.2, 110)
+def title(S, hold=9.2, phrase=7):
+    """the opening: a held D and a slow phrase under the title card; returns the end time"""
+    S.note(0.4, 50, hold, 110)
     t = 1.6
-    for n, d in ((62, .9), (65, .45), (64, .45), (62, .9), (60, .45), (62, 1.35), (57, .9)):
+    for n, d in ((62, .9), (65, .45), (64, .45), (62, .9), (60, .45), (62, 1.35), (57, .9))[:phrase]:
         S.note(t, n, d - 0.04, 105); t += d
-    # 1: the default sound
-    S.at(10.0, 'caption', 'HOLLOW SAINT  the default sound: melody string, drone, wheel buzz, cathedral')
-    tune = [(62, .5), (64, .25), (65, .25), (67, .5), (69, .5), (70, .25), (69, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)]
-    def play(t0, tune, base=50, vel=108, hold_bass=True, legato=0.04):
-        t = t0
-        if hold_bass:
-            S.note(t0, base, sum(d for _, d in tune) - 0.02, vel)
-        for n, d in tune:
-            S.note(t, n, d - legato, vel); t += d
-        return t
-    t = play(10.2, tune)
-    t = play(t, tune)
-    # 2: DRONE
+    return t
+
+
+TUNE = [(62, .5), (64, .25), (65, .25), (67, .5), (69, .5), (70, .25), (69, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)]
+SLOW = [(62, 1.0), (65, 1.0), (64, 1.0), (60, 1.0)]
+
+
+def engine_section(S, t):
+    """the default sound, then each knob and its push; returns the end time"""
+    tune, slow = TUNE, SLOW
+    S.at(t, 'caption', 'HOLLOW SAINT  the default sound: melody string, drone, wheel buzz, cathedral')
+    t = play(S, t + 0.2, tune)
+    t = play(S, t, tune)
+    # DRONE
     S.at(t + 0.2, 'caption', 'BLUE  DRONE: off, subtle and dark, rich and resonant, dense with a sub-octave')
     S.at(t + 0.2, 'knob', 0, 0)
     S.at(t + 0.6, 'ramp', 0, 0, 32767, 11.0)
-    t0 = t + 0.6
-    slow = [(62, 1.0), (65, 1.0), (64, 1.0), (60, 1.0)]
-    t = play(t0, slow * 3, base=50)
+    t = play(S, t + 0.6, slow * 3, base=50)
     S.at(t + 0.1, 'caption', 'push BLUE  the drone\'s key: FOLLOW the lowest note, or a fixed key (here D)')
     S.at(t + 0.1, 'knob', 0, 22000); S.at(t + 0.1, 'page', 0, 1); S.at(t + 0.1, 'word', 5, 1260)
     S.at(t + 1.6, 'word', 5, 8823)
-    t = play(t + 0.3, [(69, .5), (67, .5), (65, .5), (64, .5), (65, .5), (62, .5), (60, .5), (62, 1.0)], hold_bass=False)
+    t = play(S, t + 0.3, [(69, .5), (67, .5), (65, .5), (64, .5), (65, .5), (62, .5), (60, .5), (62, 1.0)], hold_bass=False)
     S.at(t, 'page', 0, 0)
-    # 3: STRINGS
+    # STRINGS
     S.at(t + 0.2, 'caption', 'GREEN  STRINGS: soft hollow flute, nasal hurdy-gurdy, bright and cutting')
     S.at(t + 0.2, 'word', 5, 1260); S.at(t + 0.2, 'knob', 1, 0)
     S.at(t + 0.6, 'ramp', 1, 0, 32767, 12.0)
-    t = play(t + 0.6, tune + tune + [(62, 2.0)])
-    # 4: WHEEL BUZZ
+    t = play(S, t + 0.6, tune + tune + [(62, 2.0)])
+    # WHEEL BUZZ
     S.at(t + 0.2, 'caption', 'WHITE  WHEEL BUZZ: smooth, then the dog lifts on each wheel stroke, in tempo')
     S.at(t + 0.2, 'knob', 1, 16384); S.at(t + 0.2, 'knob', 2, 0)
     S.at(t + 0.6, 'ramp', 2, 0, 32767, 13.0)
-    t = play(t + 0.6, slow * 3 + [(62, 2.0)])
+    t = play(S, t + 0.6, slow * 3 + [(62, 2.0)])
     S.at(t + 0.1, 'caption', 'push WHITE  the stroke rate: steady, 1 bar, 1/2, 1/4, 1/8, 1/8 triplet, 1/16')
     S.at(t + 0.1, 'knob', 2, 21000); S.at(t + 0.1, 'page', 2, 1)
     S.note(t + 0.1, 50, 9.8, 110); S.note(t + 0.1, 62, 9.8, 105)
@@ -113,7 +109,7 @@ def performance():
         S.at(t + 0.1 + j * 1.4, 'word', 7, P.rate_word(r))
     t += 10.0
     S.at(t, 'page', 2, 0); S.at(t, 'word', 7, P.rate_word('1/8'))
-    # 5: CATHEDRAL
+    # CATHEDRAL
     S.at(t + 0.2, 'caption', 'RED  CATHEDRAL: dry and close, hollow and old-world, dark and expansive, a distant bell')
     S.at(t + 0.2, 'knob', 2, 14000); S.at(t + 0.2, 'knob', 3, 0)
     S.at(t + 0.2, 'adsr', 60, 400, 32767, 2600)
@@ -121,13 +117,41 @@ def performance():
     tt = t + 0.6
     for n in (62, 69, 65, 72, 70, 67, 69, 62, 74, 69, 65, 62, 57):
         S.note(tt, n, 0.35, 112); tt += 1.0
-    t = tt + 2.2
-    t = presets_section(S, t)
+    return tt + 2.2
+
+
+def start():
+    S = Script()
+    S.at(0, 'bpm', 96)
+    S.preset(0, P.PRESETS[0])
+    S.at(0, 'word', 6, 8192)
+    S.at(0, 'caption', '')
+    return S
+
+
+def finish(S, t):
     S.at(t, 'alloff')
     S.at(t, 'caption', 'END')
     S.at(t + 3.5, 'end')
     S.lines.sort(key=lambda l: float(l.split()[0]))
     return S.lines
+
+
+def performance():
+    """the original tour: the engine, then the presets"""
+    S = start()
+    title(S)
+    t = engine_section(S, 10.0)
+    return finish(S, presets_section(S, t))
+
+
+def demo():
+    """the full demo: the engine, the 0.7.0 features, then the presets"""
+    S = start()
+    title(S)
+    t = engine_section(S, 10.0)
+    t = features_section(S, t, intro='LO-FI RELIC  back to the default sound, clean')
+    return finish(S, presets_section(S, t))
 
 
 def presets_section(S, t):
@@ -172,22 +196,21 @@ def play(S, t0, tune, base=50, vel=108, hold_bass=True, legato=0.04):
 
 def features():
     """0.7.0: the Lo-Fi Relic, Crank & Tremor, both together, then the presets"""
-    S = Script()
+    S = start()
+    title(S, hold=7.4, phrase=6)
+    t = features_section(S, 8.4)
+    return finish(S, presets_section(S, t))
+
+
+def features_section(S, t, intro='the instrument as it is: no relic'):
+    """the Lo-Fi Relic, Crank & Tremor, then both together; returns the end time"""
     hs = P.PRESETS[0]
-    S.at(0, 'bpm', 96)
-    S.preset(0, hs)
-    S.at(0, 'word', 6, 8192)
-    S.at(0, 'caption', '')
-    tune = [(62, .5), (64, .25), (65, .25), (67, .5), (69, .5), (70, .25), (69, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)]
-    slow = [(62, 1.0), (65, 1.0), (64, 1.0), (60, 1.0)]
-    # title
-    S.note(0.4, 50, 7.4, 110)
-    t = 1.6
-    for n, d in ((62, .9), (65, .45), (64, .45), (62, .9), (60, .45), (62, 1.35)):
-        S.note(t, n, d - 0.04, 105); t += d
+    tune, slow = TUNE, SLOW
     # ---- LO-FI RELIC
-    t = 8.4
-    S.at(t, 'caption', 'the instrument as it is: no relic')
+    S.at(t, 'alloff')
+    S.preset(t, hs)
+    S.at(t, 'word', 6, 8192)
+    S.at(t, 'caption', intro)
     t = play(S, t + 0.2, tune)
     S.at(t + 0.1, 'caption', 'push GREEN  LO-FI RELIC: an old tape in a forgotten room (age 25 %)')
     S.at(t + 0.1, 'page', 1, 1)
@@ -240,14 +263,7 @@ def features():
     S.at(t, 'knob', 2, 18000); S.at(t, 'word', 7, P.rate_word('1/8')); S.at(t, 'knob', 3, 26000)
     t = play(S, t + 0.2, tune + tune)
     S.at(t + 0.4, 'page', 1, 0)
-    t += 2.2
-    # ---- the presets
-    t = presets_section(S, t)
-    S.at(t, 'alloff')
-    S.at(t, 'caption', 'END')
-    S.at(t + 3.5, 'end')
-    S.lines.sort(key=lambda l: float(l.split()[0]))
-    return S.lines
+    return t + 2.2
 
 
 # ------------------------------------------------------------------------------------------------ frames
@@ -357,18 +373,22 @@ def _frame(args):
 def main():
     global TAGLINE
     args = sys.argv[1:]
-    feat = '--features' in args
-    args = [a for a in args if a != '--features']
-    if feat:
+    mode = next((a for a in args if a in ('--features', '--demo')), '')
+    args = [a for a in args if a not in ('--features', '--demo')]
+    perf, name = {'--features': (features, 'hollow_saint_0.7.0_features.mp4'),
+                  '--demo': (demo, 'hollow_saint_0.7.0_demo.mp4')}.get(mode, (performance, 'hollow_saint_tour.mp4'))
+    if mode == '--features':
         TAGLINE = '0.7.0: lo-fi relic  /  crank & tremor  /  the presets'
-    mp4 = args[0] if args else os.path.join(OUT_DIR, 'hollow_saint_0.7.0_features.mp4' if feat else 'hollow_saint_tour.mp4')
+    elif mode == '--demo':
+        TAGLINE = '0.7.0: the engine  /  lo-fi relic  /  crank & tremor  /  the presets'
+    mp4 = args[0] if args else os.path.join(OUT_DIR, name)
     os.makedirs(OUT_DIR, exist_ok=True)
     fdir = os.path.join(OUT_DIR, 'frames')
     os.makedirs(fdir, exist_ok=True)
     for f in os.listdir(fdir):
         os.remove(os.path.join(fdir, f))
     script = os.path.join(OUT_DIR, 'tour.txt')
-    open(script, 'w').write('\n'.join(features() if feat else performance()) + '\n')
+    open(script, 'w').write('\n'.join(perf()) + '\n')
     exe = os.path.join(OUT_DIR, 'perform')
     sdk = os.path.join(KENNEL, 'synth_sdk')
     subprocess.run(['cc', '-O2', '-DOP1_HOST', '-DENGINE=ENGINE_hollow_saint', '-DSCREEN=SCREEN_hollow_saint',
