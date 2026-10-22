@@ -28,6 +28,9 @@ void host_text_draw(void *t, void *r, const int32_t *m) { (void)t; (void)r; (voi
 
 extern const op1_engine_t ENGINE;
 volatile int32_t sink;
+static int blocks_override;
+/* every engine render goes through here: valgrind --tool=callgrind --toggle-collect=engine_render counts only it */
+__attribute__((noinline)) void engine_render(void *v, int16_t *out, const int16_t *k) { ENGINE.render(v, out, k); }
 
 static double run(const int16_t *k4)
 {
@@ -38,22 +41,30 @@ static double run(const int16_t *k4)
         host_voice_vel[v] = 100 << 8;
         ENGINE.note_on(OP1_VOICE(v), k);
     }
-    const int blocks = 44100 * 6 / OP1_BLOCK;
+    const int blocks = blocks_override ? blocks_override : 44100 * 6 / OP1_BLOCK;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int b = 0; b < blocks; b++)
         for (int v = 0; v < 6; v++) {
             int32_t inc = (int32_t)lrint(4294967296.0 * 440.0 * pow(2, (notes[v] - 69) / 12.0) / 44100);
             for (int n = 0; n < OP1_BLOCK; n++) { host_pitch_inc[n] = inc; host_voice_env[n] = 24576; }
-            ENGINE.render(OP1_VOICE(v), out, k);
+            engine_render(OP1_VOICE(v), out, k);
             sink += out[b & 127];
         }
     clock_gettime(CLOCK_MONOTONIC, &t1);
     return ((t1.tv_sec - t0.tv_sec) * 1e9 + (t1.tv_nsec - t0.tv_nsec)) / (blocks * 6.0);
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+    /* "count <mid|max|zero>": one 2 s pass of one setting, for instruction counting under valgrind */
+    if (argc > 2) {
+        for (int i = 0; i < 8192; i++) host_sine[i] = (int16_t)lrint(32767.0 * sin(2 * M_PI * i / 8192.0));
+        static const int16_t m4[4] = { 16384, 16384, 16384, 16384 }, h4[4] = { 32767, 32767, 32767, 32767 }, z4[4] = { 0 };
+        blocks_override = 44100 * 2 / OP1_BLOCK;
+        run(argv[2][1] == 'i' ? m4 : argv[2][1] == 'a' ? h4 : z4);
+        return 0;
+    }
     for (int i = 0; i < 8192; i++) host_sine[i] = (int16_t)lrint(32767.0 * sin(2 * M_PI * i / 8192.0));
     static const int16_t mid[4] = { 16384, 16384, 16384, 16384 }, hi[4] = { 32767, 32767, 32767, 32767 }, lo[4] = { 0 };
     /* the minimum of 5 runs per setting: the host's own noise only ever adds time */

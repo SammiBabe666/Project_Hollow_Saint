@@ -44,8 +44,9 @@ typedef struct { int active, gate, note, stage; int32_t env; uint32_t born; } fw
 static fw_voice fv[NV];
 static uint32_t now_block;
 static int16_t knobs[8] = { 0, 0, 0, 0, 0x5300 + 32, 0, 0, 0 };
-/* stock-like ADSR, Q15 per sample (the OP-1's T2 page): attack, decay, sustain level, release */
-static int32_t a_inc = 32767 / 441, d_dec = 8000 / 4410, sus = 24576, r_dec = 24576 / 13230;   /* 10 ms, 100 ms, 0.75, 300 ms */
+/* stock-like ADSR (the OP-1's T2 page), kept in Q23 so slow stages still move: attack, decay, sustain, release */
+#define ENV1 (32767 << 8)
+static int32_t a_inc = ENV1 / 441, d_dec = (8192 << 8) / 4410, sus = 24576 << 8, r_dec = (24576 << 8) / 13230;   /* 10 ms, 100 ms, 0.75, 300 ms */
 static double bend_cents;                       /* pitch offset for all voices (vibrato / bend tests) */
 
 static int32_t inc_of(double midi) { return (int32_t)lrint(4294967296.0 * 440.0 * pow(2, (midi - 69) / 12.0) / 44100); }
@@ -82,12 +83,12 @@ static void all_off(void) { for (int i = 0; i < NV; i++) if (fv[i].active && fv[
 static int32_t env_step(fw_voice *v)
 {
     switch (v->stage) {
-    case 0: v->env += a_inc; if (v->env >= 32767) { v->env = 32767; v->stage = 1; } break;
+    case 0: v->env += a_inc; if (v->env >= ENV1) { v->env = ENV1; v->stage = 1; } break;
     case 1: v->env -= d_dec; if (v->env <= sus) { v->env = sus; v->stage = 2; } break;
     case 2: break;
     case 3: v->env -= r_dec; if (v->env <= 0) { v->env = 0; v->active = 0; } break;
     }
-    return v->env;
+    return v->env >> 8;
 }
 
 /* ---- one bus block: all active voices, ascending ---- */
@@ -207,6 +208,12 @@ static void sc_phrase(void)       /* legato melody over a held low note (the "ho
 }
 static void sc_chord6(void) { int c[] = { 36, 43, 48, 51, 55, 60 }; for (int i = 0; i < 6; i++) note_on(c[i], 127); hold(3.0); all_off(); hold(1.0); }
 static void sc_single(void) { note_on(48, 127); hold(4.0); all_off(); hold(0.8); }
+static void sc_tail(void)         /* a short note with a long release: the cathedral's space and the bell */
+{
+    r_dec = (24576 << 8) / (44100 * 3);                    /* 3 s release */
+    note_on(55, 127); hold(0.6); all_off(); hold(3.4);
+    r_dec = (24576 << 8) / 13230;
+}
 static void sc_range(void)
 {
     for (int m = 21; m <= 108; m += 3) { note_on(m, 127); hold(0.35); note_off(m); hold(0.05); }
@@ -225,11 +232,11 @@ static void sc_sweep2(void) { sweep(2); }
 static void sc_sweep3(void) { sweep(3); }
 static void sc_steal(void)        /* fast notes, long release: stealing every note; repeated same-note retriggers */
 {
-    r_dec = 24576 / 44100;                                 /* 1 s release */
+    r_dec = (24576 << 8) / 44100;                          /* 1 s release */
     static const int seq[] = { 48, 55, 60, 63, 67, 72, 48, 50, 53, 58, 62, 65, 48, 48, 48, 48, 72, 36, 0 };
     for (int i = 0; seq[i]; i++) { note_on(seq[i], 100 + (i & 1) * 27); hold(0.09); note_off(seq[i]); hold(0.03); }
     hold(1.2);
-    r_dec = 24576 / 13230;
+    r_dec = (24576 << 8) / 13230;
 }
 static void sc_extreme(void)      /* the 16 knob corners, a 4-note chord each, sustained */
 {
@@ -278,6 +285,7 @@ static scen_t scen[] = {
     { "vibrato", sc_vibrato, 32767, 0, 0, 0 },
     { "long",    sc_long,    40000, 1, 2.0, 20.0 },
     { "handover", sc_handover, 32767, 0, 0, 0 },
+    { "tail",    sc_tail,    32767, 0, 0, 0 },
 };
 
 int main(int argc, char **argv)

@@ -1,6 +1,6 @@
 /* Cathedral of the Hollow Saint (plugin id hollow_saint): a hurdy-gurdy for the original OP-1, kennel synth plugin.
  *
- * Milestone 4: melody string + drone + wheel buzz.
+ * The four controls (all four sound-shaping; pushes open second pages where noted):
  *   blue  (knob 0) DRONE: off (0) .. subtle and dark .. rich and resonant (middle) .. dense, with a sub-octave (high).
  *                  Push for page 2: the drone's tuning, FOLLOW (the lowest held note) or a fixed key C .. B (word 5).
  *   green (knob 1) STRINGS: soft hollow, almost flute-like (low) .. nasal hurdy-gurdy (middle) .. bright and cutting
@@ -8,7 +8,8 @@
  *   white (knob 2) WHEEL BUZZ: smooth (0) .. rhythmic buzzing on the wheel strokes (middle) .. a continuous, gritty
  *                  rattle with accents (high). Push for page 2: the stroke rate, steady / 1/4 / 1/8 / 1/8T / 1/16 of
  *                  the OP-1's tempo (word 7).
- *   Not yet: orange CATHEDRAL (no effect yet).
+ *   orange (knob 3) CATHEDRAL: dry and close (0) .. hollow, resonant, old-world (middle) .. dark, expansive and
+ *                  otherworldly, with a distant bell at each note (high).
  *
  * The string: a bowed string's waveform is close to a sawtooth (Helmholtz motion); its nasal reedy colour comes from a
  * narrow pulse and the instrument body. Per sample: a polyBLEP saw, a polyBLEP pulse (two saws, one offset by the pulse
@@ -37,6 +38,19 @@
  * per block; when the clock stands still, e.g. tape stopped, a free-running phase at the same tempo takes over) plus a
  * steady part, through a pressure threshold, so each stroke kicks the buzz in. The strokes also swell the string a
  * little, and at high settings each melody-string cycle gets a random roughness (grit).
+ *
+ * The cathedral (per voice; the engine never sees the voice sum, and the OP-1's own FX slot stays free for a real
+ * reverb): a wet path at half rate (22.05 kHz; it is dark by design), mixed with the full-band dry voice. Two short body
+ * combs (4.0 and 5.1 ms, one with inverted feedback: odd resonances, hollow) for the old-world body in the middle; two
+ * allpass diffusers into a 47 ms feedback comb damped by a low-pass in its loop (up to ~1.6 s) for the space at the top,
+ * a darkening low-pass on the dry path, and a faint church-bell strike at each note (hum, minor-third tierce, nominal
+ * and an inharmonic upper partial of the note, decaying 0.4 .. 3 s) fed only into the room, so it sounds distant. The
+ * tail lasts as long as the voice's own release: that is the OP-1's envelope, after render. Delay lines are int16
+ * written with saturation, every feedback is below 1 and damped: nothing can run away. A line that has been off is
+ * cleared before it runs again, so no stale tail replays. Fully left, the whole stage is bypassed.
+ * Bow lift: after note off the voice's sources (string, drone, buzz) fade, as the wheel lets go of the strings, faster
+ * the higher CATHEDRAL is (never at 0 %: the plain OP-1 release; ~2.4 s at 25 %, ~0.6 s at 50 %, ~150 ms at 100 %),
+ * while the body, the room and the bell ring on through the release (T2) that the OP-1 applies after render.
  *
  * Fixed point: Q15 throughout (32768 = 1.0); signals stay within +-65535 before each multiply by a Q15 gain so every
  * product fits in 31 bits. No division or 64-bit arithmetic per sample (one division per block for the polyBLEP).
@@ -148,8 +162,31 @@ static inline int32_t stroke_env(uint32_t sp)
 static uint32_t wheel_free;
 static uint8_t wheel_new_block;
 
+/* ---------------------------------------------------------------- CATHEDRAL: the knob's map */
+static const int32_t T_CWET[5]  = { 0, 8192, 14746, 18022, 20316 };      /* wet: 0, .25, .45, .55, .62 */
+static const int32_t T_CDRY[5]  = { 32767, 30147, 26214, 22938, 19661 }; /* dry: 1, .92, .8, .7, .6 */
+static const int32_t T_CBFB[5]  = { 0, 14746, 22938, 21299, 18022 };     /* body comb feedback .45 .7 .65 .55 */
+static const int32_t T_CBODY[5] = { 0, 26214, 32767, 19661, 13107 };     /* body in the wet */
+static const int32_t T_CRFB[5]  = { 9830, 14746, 20316, 24576, 26870 };  /* room feedback .3 .45 .62 .75 .82 */
+static const int32_t T_CROOM[5] = { 0, 6554, 16384, 29491, 39322 };      /* room in the wet (up to 1.2) */
+static const int32_t T_CDAMP[5] = { 4500, 3800, 3000, 2300, 1700 };      /* room damping, Hz */
+static const int32_t T_CDARK[5] = { 8000, 8000, 7000, 4500, 2800 };      /* dry low-pass, Hz (blended in from 25 %) */
+static const int32_t T_CBELL[5] = { 0, 0, 0, 3500, 9000 };               /* the distant bell's strike */
+#define BOW_LIFT 634                     /* after note off, at CATHEDRAL 100 %: the bow lifts in ~150 ms */
+#define CB1 89                           /* body combs: 4.04 ms, 5.12 ms at 22.05 kHz */
+#define CB2 113
+#define CA1 157                          /* diffusers: 7.1 ms, 10.9 ms */
+#define CA2 241
+#define CR  1031                         /* room comb: 46.8 ms */
+#define AP_G 19661                       /* diffuser gain 0.6 */
+/* bell partials against the note: hum 0.5, tierce 1.19 (a minor third), nominal 2.0, upper 2.66 (Q12); their decay
+ * shifts per 22.05 kHz sample (3 s, 1.5 s, 0.74 s, 0.37 s) and weights */
+static const uint32_t BELL_RATIO[4] = { 2048, 4874, 8192, 10895 };
+static const uint8_t  BELL_DECAY[4] = { 16, 15, 14, 13 };
+static const int32_t  BELL_W[4]     = { 22938, 16384, 19661, 11469 };
+
 /* ramped gains: each moves linearly across the block from the previous block's value */
-enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, G_BUZZ, NG };
+enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, G_BUZZ, G_WET, G_DRY, G_BODY, G_ROOM, NG };
 
 typedef struct {
     uint32_t ph;                 /* melody string phase (2^32 = one cycle) */
@@ -172,6 +209,16 @@ typedef struct {
     int32_t tlp;                 /* trompette tone low-pass */
     int32_t amp;                 /* smoothed dog amplitude (Q15) */
     int32_t mjit;                /* melody grit: this cycle's gain */
+    int32_t bowg;                /* bow lift after note off, Q15 */
+    /* cathedral (half rate) */
+    int16_t cb1[CB1], cb2[CB2], ca1[CA1], ca2[CA2], cr[CR];
+    uint16_t ib1, ib2, ia1, ia2, ir;
+    int32_t rdl;                 /* room damping low-pass */
+    int32_t wprev;               /* the last wet sample (for the 2x interpolation) */
+    int32_t dark;                /* dry low-pass */
+    uint32_t bph[4];             /* bell partial phases (22.05 kHz) */
+    int32_t benv[4];             /* their envelopes, Q23 */
+    uint8_t cat_on, bell_pending;
     uint8_t held, fresh;
 } voice_t;
 
@@ -217,6 +264,8 @@ static void hs_note_on(void *self, const int16_t *k)
         v->tph = 0; v->slap = v->rattle = v->rlp = v->rbp = v->tlp = v->amp = 0;
     }
     v->mjit = 32767;
+    v->bowg = 32767;
+    v->bell_pending = 1;                    /* struck at the first render (the velocity and pitch are known there) */
     /* the owner keeps its drone state when it is re-triggered (a stolen or repeated note): no restart */
     v->held = 1;
     v->fresh = 1;
@@ -251,7 +300,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
 
     /* knobs: ~6 ms smoothing (two blocks); a fresh note starts at the current position */
     for (int i = 0; i < 4; i++) v->ks[i] += (knob(k, i) - v->ks[i]) >> 1;
-    const int32_t d = v->ks[0], s = v->ks[1], bz = v->ks[2];
+    const int32_t d = v->ks[0], s = v->ks[1], bz = v->ks[2], c = v->ks[3];
 
     /* the wheel: stroke phase at the block start and its step per sample, from the beat clock (once per block) */
     uint32_t sp = 0, sinc = 0;
@@ -290,11 +339,15 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     const int32_t vel = op1_voice_vel_gain(self);                          /* Q15 */
     const int32_t bow = 18000 + ((vel * 14767) >> 15);                     /* 0.55 .. 1.0 */
 
+    /* bow lift after note off: k = c^2 x BOW_LIFT per block */
+    if (!v->held) v->bowg -= (v->bowg * ((((c * c) >> 15) * BOW_LIFT) >> 15)) >> 15;
+    const int32_t bowg = v->bowg;
+
     /* block targets */
     int32_t t[NG];
     /* the string's loudness compensation is folded into its source gains (the filters are linear), so it does not
      * move the drone */
-    const int32_t lvl = tab5(T_LEVEL, s);
+    const int32_t lvl = (tab5(T_LEVEL, s) * bowg) >> 15;
     t[G_FLUTE] = (tab5(T_FLUTE, s) * lvl) >> 15;
     t[G_REED]  = (tab5(T_REED, s) * lvl) >> 15;
     t[G_SAW]   = (tab5(T_SAW, s) * lvl) >> 15;
@@ -306,11 +359,16 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     t[G_OUT]   = (9000 * (12000 + ((vel * 20767) >> 15))) >> 15;         /* level x velocity */
     /* drone: ownership fade, then its level */
     v->dgain = clampi(v->dgain + (vi == owner ? DRONE_FADE : -DRONE_FADE), 0, 32767);
-    t[G_DRONE] = (tab5(T_DLEVEL, d) * v->dgain) >> 15;
-    t[G_BUZZ]  = bz < 1000 ? 0 : (tab5(T_BLEVEL, bz) * v->dgain) >> 15;   /* the bottom 3 %: off */
+    const int32_t own = (v->dgain * bowg) >> 15;
+    t[G_DRONE] = (tab5(T_DLEVEL, d) * own) >> 15;
+    t[G_BUZZ]  = bz < 1000 ? 0 : (tab5(T_BLEVEL, bz) * own) >> 15;     /* the bottom 3 %: off */
 #ifdef HS_TEST_SOLO_DRONE
     t[G_DRONE] = 0;                              /* (solo builds measure one part at a time: the buzz here) */
 #endif
+    t[G_WET]  = tab5(T_CWET, c);
+    t[G_DRY]  = tab5(T_CDRY, c);
+    t[G_BODY] = tab5(T_CBODY, c);
+    t[G_ROOM] = tab5(T_CROOM, c);
     const uint32_t pw = (uint32_t)tab5(T_PW, s) << 17;
     const int32_t f0x = (dt * 1378) >> 10;                                 /* the pitch in Hz (dt * 44100 / 32768) */
     const int32_t ta = onepole_coef((((tab5(T_LPK, s) * f0x) >> 0) * bow) >> 15);
@@ -460,7 +518,88 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         v->tinc = 0;
     }
 
-    /* ---- output: DC blocker, level x velocity, the strokes swelling the string */
+    /* ---- cathedral: the wet path at 22.05 kHz, mixed with the dry voice */
+    if (v->bell_pending) {
+        v->bell_pending = 0;
+        const int32_t bl = (tab5(T_CBELL, c) * vel) >> 15;
+        for (int j = 0; j < 4; j++) { v->bph[j] = 0; v->benv[j] = bl ? ((bl * BELL_W[j]) >> 15) << 8 : 0; }
+    }
+    const int bells = (v->benv[0] | v->benv[1] | v->benv[2] | v->benv[3]) != 0;
+    if ((g0[G_WET] | t[G_WET]) || bells) {
+        if (!v->cat_on) {                                                  /* off since: clear, no stale tail */
+            for (int i = 0; i < CB1; i++) v->cb1[i] = 0;
+            for (int i = 0; i < CB2; i++) v->cb2[i] = 0;
+            for (int i = 0; i < CA1; i++) v->ca1[i] = 0;
+            for (int i = 0; i < CA2; i++) v->ca2[i] = 0;
+            for (int i = 0; i < CR; i++) v->cr[i] = 0;
+            v->rdl = v->wprev = 0;
+            v->cat_on = 1;
+        }
+        const int32_t bfb = tab5(T_CBFB, c), rfb = tab5(T_CRFB, c);
+        const int32_t rdamp = onepole_coef(tab5(T_CDAMP, c) * 2);          /* the coefficient at 22.05 kHz */
+        uint32_t binc[4];
+        for (int j = 0; j < 4; j++) {
+            const uint32_t bi = (((uint32_t)inc[0] >> 12) * BELL_RATIO[j]) << 1;
+            binc[j] = bi < 0x40000000u ? bi : 0;                           /* partials above 5.5 kHz: left out */
+        }
+        int16_t *cb1 = v->cb1, *cb2 = v->cb2, *ca1 = v->ca1, *ca2 = v->ca2, *cr = v->cr;
+        unsigned ib1 = v->ib1, ib2 = v->ib2, ia1 = v->ia1, ia2 = v->ia2, ir = v->ir;
+        int32_t rdl = v->rdl, wprev = v->wprev;
+        for (int sb = 1; sb <= 8; sb++) {
+#define GAIN(i) (g0[i] + ((dg[i] * sb) >> 3))
+            const int32_t gw = GAIN(G_WET), gdry = GAIN(G_DRY), gbody = GAIN(G_BODY), groom = GAIN(G_ROOM);
+#undef GAIN
+            for (int m = 0; m < 8; m++) {
+                const int i = (sb - 1) * 16 + m * 2;
+                const int32_t x0 = clampi(buf[i], -65535, 65535), x1 = clampi(buf[i + 1], -65535, 65535);
+                int32_t xh = (x0 + x1) >> 3;                               /* half rate, a quarter scale: +-16384 */
+                if (bells) {
+                    int32_t bsum = 0;
+                    for (int j = 0; j < 4; j++) {
+                        if (!v->benv[j]) continue;
+                        v->bph[j] += binc[j];
+                        bsum += (sine(v->bph[j]) * (v->benv[j] >> 8)) >> 15;
+                        v->benv[j] -= (v->benv[j] >> BELL_DECAY[j]) + 1;
+                        if (v->benv[j] < 256) v->benv[j] = 0;
+                    }
+                    xh += bsum >> 2;
+                }
+                /* body: two short feedback combs, one inverted (odd resonances: hollow) */
+                const int32_t y1 = xh + ((bfb * cb1[ib1]) >> 15);
+                const int32_t y2 = xh - ((bfb * cb2[ib2]) >> 15);
+                cb1[ib1] = op1_sat16(y1); if (++ib1 >= CB1) ib1 = 0;
+                cb2[ib2] = op1_sat16(y2); if (++ib2 >= CB2) ib2 = 0;
+                const int32_t body = (y1 + y2) >> 1;
+                /* two diffusers, then the damped room comb */
+                int32_t a = ca1[ia1];
+                int32_t w = (body >> 1) - ((AP_G * a) >> 15);
+                int32_t z = a + ((AP_G * w) >> 15);
+                ca1[ia1] = op1_sat16(w); if (++ia1 >= CA1) ia1 = 0;
+                a = ca2[ia2];
+                w = z - ((AP_G * a) >> 15);
+                z = a + ((AP_G * w) >> 15);
+                ca2[ia2] = op1_sat16(w); if (++ia2 >= CA2) ia2 = 0;
+                const int32_t r = cr[ir];
+                rdl += (((r - rdl) >> 1) * rdamp) >> 14;
+                cr[ir] = op1_sat16(z + ((rfb * rdl) >> 15)); if (++ir >= CR) ir = 0;
+                const int32_t wet = ((body * gbody) >> 15) + ((r * groom) >> 15);
+                /* back to 44.1 kHz: linear interpolation; x4 for the quarter scale (>> 13) */
+                buf[i]     = ((x0 * gdry) >> 15) + ((((wprev + wet) >> 1) * gw) >> 13);
+                buf[i + 1] = ((x1 * gdry) >> 15) + ((wet * gw) >> 13);
+                wprev = wet;
+            }
+        }
+        v->ib1 = (uint16_t)ib1; v->ib2 = (uint16_t)ib2; v->ia1 = (uint16_t)ia1; v->ia2 = (uint16_t)ia2; v->ir = (uint16_t)ir;
+        v->rdl = rdl; v->wprev = wprev;
+    } else {
+        v->cat_on = 0;
+    }
+
+    /* ---- output: dark low-pass (blended in from 25 % CATHEDRAL), DC blocker, level x velocity, the strokes
+     * swelling the string */
+    const int32_t kd = clampi((c - 8192) * 2, 0, 32767);
+    const int32_t dcoef = onepole_coef(tab5(T_CDARK, c));
+    int32_t dark = kd ? v->dark : 0;
     const int32_t swell = tab5(T_SWELL, bz);
     int32_t dc8 = v->dc8;
     for (int sb = 1; sb <= 8; sb++) {
@@ -468,13 +607,18 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         go += (go * ((swell * senv[sb - 1]) >> 15)) >> 15;
         for (int n = 0; n < 16; n++) {
             const int i = (sb - 1) * 16 + n;
-            int32_t y = buf[i];
+            int32_t y = clampi(buf[i], -65535, 65535);
+            if (kd) {
+                dark += (((y - dark) >> 1) * dcoef) >> 14;
+                y += (((dark - y) >> 1) * kd) >> 14;
+            }
             dc8 += (y * 256 - dc8) >> 9;
             y -= dc8 >> 8;
             out[i] = op1_sat16((clampi(y, -65535, 65535) * go) >> 15);
         }
     }
     v->dc8 = dc8;
+    v->dark = kd ? dark : 0;
     v_blk[vi] = blk;
 }
 

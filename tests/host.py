@@ -90,10 +90,39 @@ def bench():
     return 0
 
 
+def cost(extra_sources=None):
+    """instructions executed inside engine render per voice-block (valgrind callgrind), mid / max / zero knobs; the same
+    for shipped kennel engines. Deterministic, unlike wall time; still x86 instructions, not Blackfin cycles."""
+    m = meta()
+    rows = [('hollow_saint', extra_sources or [os.path.join(PLUGIN, s) for s in m['sources']], m['symbol'])]
+    for name in ('eva', 'oxbow', 'taffy', 'wavetable'):
+        d = os.path.join(SDK, 'plugins', name)
+        pm = json.load(open(os.path.join(d, 'plugin.json')))
+        rows.append((name, [os.path.join(d, s) for s in pm['sources']], pm['symbol']))
+    nblk = (44100 * 2 // 128) * 6
+    res = {}
+    for name, srcs, sym in rows:
+        exe = os.path.join(OUT, 'cost_' + name)
+        cc([os.path.join(HERE, 'bench.c'), *srcs], exe, ['-O2', '-g'], [f'-DENGINE={sym}', '-I', os.path.dirname(srcs[0])])
+        vals = []
+        for setting in ('mid', 'max', 'zero'):
+            outf = os.path.join(OUT, f'cg_{name}_{setting}.out')
+            subprocess.run(['valgrind', '--tool=callgrind', '--toggle-collect=engine_render', f'--callgrind-out-file={outf}',
+                            exe, 'count', setting], capture_output=True, check=True)
+            tot = next(int(l.split()[1]) for l in open(outf) if l.startswith('totals:') or l.startswith('summary:'))
+            vals.append(tot / nblk)
+        res[name] = vals
+        print(f'{name:14s} instr/voice-block  mid {vals[0]:7.0f}  max {vals[1]:7.0f}  zero {vals[2]:7.0f}  '
+              f'worst {max(vals):7.0f}' + (f'  = {max(vals) / max(res["eva"]):.2f} x eva worst' if 'eva' in res else ''))
+    hs, ev = max(res['hollow_saint']), max(res['eva'])
+    print(f'hollow_saint worst = {hs / ev:.2f} x eva worst')
+    return 0
+
+
 if __name__ == '__main__':
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('what', choices=['phrase', 'suite', 'bench'])
+    ap.add_argument('what', choices=['phrase', 'suite', 'bench', 'cost'])
     ap.add_argument('--knobs'); ap.add_argument('--only')
     a = ap.parse_args()
     k = [int(x) for x in a.knobs.split(',')] if a.knobs else None
-    sys.exit({'phrase': lambda: phrase(k), 'suite': lambda: suite(a.only), 'bench': bench}[a.what]())
+    sys.exit({'phrase': lambda: phrase(k), 'suite': lambda: suite(a.only), 'bench': bench, 'cost': cost}[a.what]())
