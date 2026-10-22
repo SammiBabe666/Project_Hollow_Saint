@@ -57,7 +57,7 @@ def suite(only=None):
     exe = os.path.join(OUT, 'suite')
     cc([os.path.join(HERE, 'suite.c'), *(os.path.join(PLUGIN, s) for s in m['sources'])], exe, SAN,
        [f'-DENGINE={m["symbol"]}'])
-    args = [exe, os.path.join(OUT, 'suite')] + ([only] if only else [])
+    args = [exe, os.path.join(OUT, 'wav')] + ([only] if only else [])
     r = subprocess.run(args)
     return r.returncode
 
