@@ -2,7 +2,9 @@
 """Build the tour video: a scripted performance through the real engine and screen code (tests/perform.c, host build),
 its audio and screen frames, with captions, muxed with ffmpeg.
 
-    python3 tools/make_tour.py [out.mp4]        (default build/tour/hollow_saint_tour.mp4)
+    python3 tools/make_tour.py [out.mp4]                 the full tour (default build/tour/hollow_saint_tour.mp4)
+    python3 tools/make_tour.py --features [out.mp4]      0.7.0: Lo-Fi Relic, Crank & Tremor, then the 8 presets
+                                                         (default build/tour/hollow_saint_0.7.0_features.mp4)
 
 What it is: the engine's own C code rendering audio on a PC, and its own screen code moving the SVG's nodes, drawn by
 tools/render_screen.py's rasteriser. Not an OP-1 recording: no OP-1 FX, the stock envelope is approximated and the
@@ -24,6 +26,7 @@ KENNEL = os.environ.get('KENNEL', '/home/claude/ref/bundle/hundekraft-3.0.3-sour
 OUT_DIR = os.path.join(ROOT, 'build', 'tour')
 SVG = os.path.join(ROOT, 'plugin', 'hollow_saint', 'hollow_saint.svg')
 FPS = 30
+TAGLINE = 'a haunted hurdy-gurdy for the original OP-1'
 VW, VH = 1280, 720
 SC, SS = 3, 2                                       # screen at 3x (960 x 480), drawn at 2x supersampling
 SX, SY = (VW - 320 * SC) // 2, 34
@@ -31,7 +34,7 @@ FONT = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf'
 FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'
 COLS = [(0x4D, 0x9E, 0xFF), (0x00, 0xED, 0x95), (0xFF, 0xFF, 0xFF), (0xFF, 0x3A, 0x5D)]
 KEYS = ['FOLLOW', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-RATES = ['steady', '1/4', '1/8', '1/8T', '1/16']
+RATES = P.RATES                                     # steady, 1 bar, 1/2, 1/4, 1/8, 1/8T, 1/16
 
 
 def ms(v):                                           # OP-1 ADSR word -> ms: an approximation for the host render
@@ -52,7 +55,7 @@ class Script:
         self.at(t, 'adsr', f'{ms(a):.0f}', f'{ms(d):.0f}', s, f'{ms(r):.0f}')
         for i, v in enumerate(knobs):
             self.at(t, 'knob', i, v)
-        self.at(t, 'word', 5, words[0]); self.at(t, 'word', 7, words[2])
+        self.at(t, 'word', 5, words[0]); self.at(t, 'word', 6, words[1]); self.at(t, 'word', 7, words[2])
 
     def note(self, t, n, dur, vel=110):
         self.at(t, 'on', n, vel); self.at(t + dur, 'off', n)
@@ -103,13 +106,13 @@ def performance():
     S.at(t + 0.2, 'knob', 1, 16384); S.at(t + 0.2, 'knob', 2, 0)
     S.at(t + 0.6, 'ramp', 2, 0, 32767, 13.0)
     t = play(t + 0.6, slow * 3 + [(62, 2.0)])
-    S.at(t + 0.1, 'caption', 'push WHITE  the stroke rate: steady, 1/4, 1/8, 1/8 triplet, 1/16')
+    S.at(t + 0.1, 'caption', 'push WHITE  the stroke rate: steady, 1 bar, 1/2, 1/4, 1/8, 1/8 triplet, 1/16')
     S.at(t + 0.1, 'knob', 2, 21000); S.at(t + 0.1, 'page', 2, 1)
-    S.note(t + 0.1, 50, 7.0, 110); S.note(t + 0.1, 62, 7.0, 105)
-    for j, w in enumerate((3276, 9830, 16384, 22937, 29490)):
-        S.at(t + 0.1 + j * 1.4, 'word', 7, w)
-    t += 7.2
-    S.at(t, 'page', 2, 0); S.at(t, 'word', 7, 16384)
+    S.note(t + 0.1, 50, 9.8, 110); S.note(t + 0.1, 62, 9.8, 105)
+    for j, r in enumerate(RATES):
+        S.at(t + 0.1 + j * 1.4, 'word', 7, P.rate_word(r))
+    t += 10.0
+    S.at(t, 'page', 2, 0); S.at(t, 'word', 7, P.rate_word('1/8'))
     # 5: CATHEDRAL
     S.at(t + 0.2, 'caption', 'RED  CATHEDRAL: dry and close, hollow and old-world, dark and expansive, a distant bell')
     S.at(t + 0.2, 'knob', 2, 14000); S.at(t + 0.2, 'knob', 3, 0)
@@ -119,7 +122,16 @@ def performance():
     for n in (62, 69, 65, 72, 70, 67, 69, 62, 74, 69, 65, 62, 57):
         S.note(tt, n, 0.35, 112); tt += 1.0
     t = tt + 2.2
-    # 6: the presets
+    t = presets_section(S, t)
+    S.at(t, 'alloff')
+    S.at(t, 'caption', 'END')
+    S.at(t + 3.5, 'end')
+    S.lines.sort(key=lambda l: float(l.split()[0]))
+    return S.lines
+
+
+def presets_section(S, t):
+    """the 8 presets, each with its own phrase; returns the end time"""
     phr = {
         'hollow saint':   [(62, .5), (64, .25), (65, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)],
         'midnight vigil': [(62, 1.5), (65, 1.0), (64, 1.5), (62, 2.0)],
@@ -146,6 +158,91 @@ def performance():
                 S.note(tt, n + o, d - 0.05, 106)
             tt += d
         t = tt + 1.6
+    return t
+
+
+def play(S, t0, tune, base=50, vel=108, hold_bass=True, legato=0.04):
+    t = t0
+    if hold_bass:
+        S.note(t0, base, sum(d for _, d in tune) - 0.02, vel)
+    for n, d in tune:
+        S.note(t, n, d - legato, vel); t += d
+    return t
+
+
+def features():
+    """0.7.0: the Lo-Fi Relic, Crank & Tremor, both together, then the presets"""
+    S = Script()
+    hs = P.PRESETS[0]
+    S.at(0, 'bpm', 96)
+    S.preset(0, hs)
+    S.at(0, 'word', 6, 8192)
+    S.at(0, 'caption', '')
+    tune = [(62, .5), (64, .25), (65, .25), (67, .5), (69, .5), (70, .25), (69, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)]
+    slow = [(62, 1.0), (65, 1.0), (64, 1.0), (60, 1.0)]
+    # title
+    S.note(0.4, 50, 7.4, 110)
+    t = 1.6
+    for n, d in ((62, .9), (65, .45), (64, .45), (62, .9), (60, .45), (62, 1.35)):
+        S.note(t, n, d - 0.04, 105); t += d
+    # ---- LO-FI RELIC
+    t = 8.4
+    S.at(t, 'caption', 'the instrument as it is: no relic')
+    t = play(S, t + 0.2, tune)
+    S.at(t + 0.1, 'caption', 'push GREEN  LO-FI RELIC: an old tape in a forgotten room (age 25 %)')
+    S.at(t + 0.1, 'page', 1, 1)
+    t = play(S, t + 0.3, tune)
+    S.at(t + 0.1, 'caption', 'turn GREEN while it is on: the relic ages (wow, grit, dust, a darker tape head)')
+    t0 = t + 0.3
+    t = play(S, t0, slow * 3)
+    steps = int((t - t0) / 0.25)
+    for j in range(steps + 1):                       # the age from 25 % to 100 %, in quarter-second steps
+        S.at(t0 + j * 0.25, 'word', 6, int(8192 + (32767 - 8192) * j / steps))
+    S.at(t + 0.1, 'caption', 'with CATHEDRAL up: the room hears the worn tape')
+    S.at(t + 0.1, 'word', 6, 22000)
+    S.at(t + 0.1, 'adsr', 60, 400, 32767, 2400)
+    S.at(t + 0.2, 'ramp', 3, 12000, 30000, 3.0)
+    tt = t + 0.4
+    for n in (62, 69, 65, 72, 70, 67, 69, 62):
+        S.note(tt, n, 0.4, 112); tt += 1.0
+    t = tt + 1.2
+    S.at(t, 'caption', 'push GREEN again: the clean instrument, the same room')
+    S.at(t, 'page', 1, 0)
+    tt = t + 0.2
+    for n in (62, 69, 65, 72, 70, 67):
+        S.note(tt, n, 0.4, 112); tt += 1.0
+    t = tt + 1.6
+    # ---- CRANK & TREMOR
+    S.preset(t, hs)
+    S.at(t, 'word', 6, 8192)
+    S.at(t, 'knob', 0, 20000)
+    S.at(t, 'page', 2, 1)
+    parts = [(8192, '1 bar', 'CRANK & TREMOR  WHITE low, 1 bar: a slow, breathing swell on the wheel'),
+             (8192, '1/2', 'WHITE low, 1/2: breathing twice a bar'),
+             (13000, '1/4', 'WHITE toward the middle, 1/4: a steady mechanical tremolo'),
+             (19000, '1/8', 'WHITE middle, 1/8: the dog starts to buzz on each stroke; the string\'s tone pulses'),
+             (29491, '1/16', 'WHITE high, 1/16: faster, aggressive buzzing')]
+    for w, r, cap in parts:
+        S.at(t, 'caption', cap)
+        S.at(t, 'knob', 2, w); S.at(t, 'word', 7, P.rate_word(r))
+        S.note(t + 0.1, 43, 5.8, 110); S.note(t + 0.1, 50, 5.8, 104)
+        tt = t + 0.6
+        for n, d in ((62, 1.25), (65, 1.25), (64, 1.25), (62, 1.25)):
+            S.note(tt, n, d - 0.05, 100); tt += d
+        t += 6.2
+    S.at(t, 'page', 2, 0)
+    S.at(t, 'caption', 'push WHITE: steady stops the pulse')
+    S.at(t, 'word', 7, P.rate_word('steady')); S.at(t, 'knob', 2, 14000)
+    t = play(S, t + 0.2, slow) + 0.6
+    # ---- both
+    S.at(t, 'caption', 'BOTH  the relic and the wheel at 1/8, under a full cathedral')
+    S.at(t, 'page', 1, 1); S.at(t, 'word', 6, 20000)
+    S.at(t, 'knob', 2, 18000); S.at(t, 'word', 7, P.rate_word('1/8')); S.at(t, 'knob', 3, 26000)
+    t = play(S, t + 0.2, tune + tune)
+    S.at(t + 0.4, 'page', 1, 0)
+    t += 2.2
+    # ---- the presets
+    t = presets_section(S, t)
     S.at(t, 'alloff')
     S.at(t, 'caption', 'END')
     S.at(t + 3.5, 'end')
@@ -230,7 +327,10 @@ def _frame(args):
     labels = [f'DRONE {k[0] * 100 // 32767:3d}%', f'STRINGS {k[1] * 100 // 32767:3d}%',
               f'WHEEL BUZZ {k[2] * 100 // 32767:3d}%', f'CATHEDRAL {k[3] * 100 // 32767:3d}%']
     labels[0] += f'  {KEYS[(max(0, w[0]) * 13) >> 15]}'
-    labels[2] += f'  {RATES[(max(0, w[2]) * 5) >> 15]}'
+    labels[2] += f'  {RATES[(max(0, w[2]) * len(RATES)) >> 15]}'
+    if pg[1]:
+        age = w[1] if w[1] > 0 else 8192
+        labels[1] = f'RELIC age {age * 100 // 32767:3d}%'
     xs = [170, 470, 790, 1110]
     for j in range(4):
         vd.text((xs[j], 604), labels[j], font=f_k, fill=COLS[j], anchor='mm')
@@ -245,23 +345,30 @@ def _frame(args):
         r = tuple(int(v * a) for v in COLS[3])
         g = tuple(int(150 * a) for _ in range(3))
         vd.text((VW // 2, 300), 'CATHEDRAL OF THE HOLLOW SAINT', font=ImageFont.truetype(FONTB, 46), fill=c, anchor='mm')
-        vd.text((VW // 2, 360), 'a haunted hurdy-gurdy for the original OP-1', font=ImageFont.truetype(FONT, 24), fill=r, anchor='mm')
+        vd.text((VW // 2, 360), TAGLINE, font=ImageFont.truetype(FONT, 24), fill=r, anchor='mm')
         sub = ('kennel synth plugin  hollow_saint  for the Hundekraft OP-1 Workshop 3.0.3' if cap != 'END'
-               else 'drone  strings  wheel buzz  cathedral  /  8 presets  /  GPL-3.0-or-later')
+               else 'drone  strings  wheel buzz  cathedral  /  lo-fi relic  crank & tremor  /  8 presets  /  '
+                    'GPL-3.0-or-later')
         vd.text((VW // 2, 410), sub, font=ImageFont.truetype(FONT, 18), fill=g, anchor='mm')
     V.save(out)
     return i
 
 
 def main():
-    mp4 = sys.argv[1] if len(sys.argv) > 1 else os.path.join(OUT_DIR, 'hollow_saint_tour.mp4')
+    global TAGLINE
+    args = sys.argv[1:]
+    feat = '--features' in args
+    args = [a for a in args if a != '--features']
+    if feat:
+        TAGLINE = '0.7.0: lo-fi relic  /  crank & tremor  /  the presets'
+    mp4 = args[0] if args else os.path.join(OUT_DIR, 'hollow_saint_0.7.0_features.mp4' if feat else 'hollow_saint_tour.mp4')
     os.makedirs(OUT_DIR, exist_ok=True)
     fdir = os.path.join(OUT_DIR, 'frames')
     os.makedirs(fdir, exist_ok=True)
     for f in os.listdir(fdir):
         os.remove(os.path.join(fdir, f))
     script = os.path.join(OUT_DIR, 'tour.txt')
-    open(script, 'w').write('\n'.join(performance()) + '\n')
+    open(script, 'w').write('\n'.join(features() if feat else performance()) + '\n')
     exe = os.path.join(OUT_DIR, 'perform')
     sdk = os.path.join(KENNEL, 'synth_sdk')
     subprocess.run(['cc', '-O2', '-DOP1_HOST', '-DENGINE=ENGINE_hollow_saint', '-DSCREEN=SCREEN_hollow_saint',
@@ -276,7 +383,7 @@ def main():
         t = fr['t']
         ta = 1.0 if t < 8.0 else max(0.0, 1.0 - (t - 8.0) / 1.5)
         jobs.append((i, fr, ta, os.path.join(fdir, f'f{i:05d}.png')))
-    with Pool(2) as pool:
+    with Pool(os.cpu_count() or 2) as pool:
         for n, _ in enumerate(pool.imap_unordered(_frame, jobs, chunksize=16)):
             if n % 600 == 0:
                 print(f'frames {n}/{len(jobs)}', flush=True)
