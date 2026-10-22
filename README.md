@@ -3,9 +3,9 @@
 A haunted hurdy-gurdy for the **original Teenage Engineering OP-1**: a kennel synth plugin (`hollow_saint`) for the
 [Hundekraft OP-1 Workshop](https://hundekraft.github.io/op1-workshop/index.html) 3.0.x. Bowed melody strings, a drone that
 can hold a key like real bourdons, a buzzing bridge that kicks in on tempo-locked wheel strokes, and a cathedral that
-darkens, rings and tolls a distant bell. Pure synthesis, no samples. Version **0.6.0**.
+darkens, rings and tolls a distant bell. Pure synthesis, no samples. Version **0.6.1**.
 
-**Install file: `release/hollow_saint.knl`** (31,516 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
+**Install file: `release/hollow_saint.knl`** (33,556 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
 folder `release/presets/`.
 
 ## Status: what has and has not been done
@@ -45,6 +45,7 @@ tests/host_sdk/harness/       op1r host mocks (op1_host.h, audio_harness.c), cre
 tests/kn_load_host.c          runs the core's own loader (kn_load.c) on a .knl
 tests/bfin_sim/               the compiled engine in the Blackfin simulator: cycles + bit-exact audio vs the host build
 tools/build_knl.sh            pack + check with both loaders
+tools/release.sh              one command: host tests, simulator, pack + loader checks, copy to release/
 tools/compare_knl.py          header and metadata of .knl files side by side
 toolchain/                    build_toolchain.sh (bfin-elf from git sources), MPC/MPFR shim, timestamp fix
 release/                      hollow_saint.knl (+ sha256) and the presets folder, ready to install
@@ -56,7 +57,8 @@ results/                      test results, preset audio previews, screen previe
 `release/hollow_saint.knl` is already built. To rebuild it you need the matching SDK and a Blackfin cross compiler
 (`bfin-elf-gcc` 13.3.0 + binutils). `toolchain/build_toolchain.sh` builds one from git sources (about an hour on two
 cores); with GNU release tarballs the SDK's own recipe (`docs/op1r-src-README.md`) is simpler. No original R246,
-device key or firmware build is needed. `tools/build_knl.sh` packs and runs both loader checks in one go.
+device key or firmware build is needed. `tools/build_knl.sh` packs and runs both loader checks in one go;
+`tools/release.sh` runs every check (host suite, simulator bit-exactness, both loaders) and refreshes `release/`.
 
 ```sh
 # 1. get the SDK that matches your OP-1's firmware (here 3.0.3) and verify it
@@ -136,21 +138,30 @@ CPU on the Blackfin instruction set: simulator cycles per 128-sample voice block
 
 | Engine | Defaults-like (all 50 %) | Worst knob setting |
 |---|---|---|
-| hollow_saint | 29,675 | **34,969** (all at maximum) |
+| hollow_saint 0.6.1 | 19,705 | **21,715** (all at maximum) |
+| hollow_saint 0.6.0 | 29,675 | 34,969 |
 | EVA (ships) | 18,877 | 20,286 |
 | Wavetable (ships) | 27,437 | 27,437 |
 | Taffy (ships) | 39,467 | 39,467 |
 
-Six voices at Hollow Saint's worst setting come to about 72 M cycles a second, roughly 18 % of the OP-1's 400 MHz
-core by the simulator's model, which does not model every stall. That sits between two engines the Workshop ships.
-On the instrument, check peak load in the resource monitor (clock screen, T1) with six voices, a heavy effect and the
-knobs at maximum. (An earlier x86 instruction-count estimate put it at 1.12 × EVA; on the real instruction set it is
-about 1.7 × EVA.)
+Six voices at Hollow Saint's worst setting come to about 45 M cycles a second, roughly 11 % of the OP-1's 400 MHz
+core by the simulator's model, which does not model every stall (0.6.0: 72 M, 18 %). That is 1.07 × EVA at the worst
+setting and 1.04 × EVA at the defaults, and below Wavetable and Taffy, which ship. On the instrument, check peak load
+in the resource monitor (clock screen, T1) with six voices, a heavy effect and the knobs at maximum.
+
+0.6.1 is a speed-up only: its audio is bit-identical to 0.6.0 (the host suite's 14 renders and the simulator's
+138,240 samples compare equal byte for byte), so presets and recordings sound exactly as before. Where the cycles
+went: 16 × 16 products in place of 32 × 32 ones wherever both operands provably fit int16 (each use says why; the
+host test builds trap if one ever does not), loops specialised so per-sample tests on the sine pair, the grit and the
+darkening become per-block ones, delay lines run in wrap-free stretches instead of testing every sample, the
+string, drone and buzz loops as small functions of their own (in one large function the polyBLEP's rare branches sat
+behind a 5-cycle jump per test), per-block divisions memoised, and a branch-free saturation. `-O2` stays: `-O3` was
+measured no faster and bigger.
 
 Loudness at defaults sits about 1 dB under EVA, with more chord headroom (6-voice chord peak 25,199 vs EVA 29,281).
-Memory: 13,372 bytes of static state (six voices' delay lines and filters), 11.5 KB of code, the 14 KB SVG; the
-`.knl` is 31.5 KB, far under the Workshop's 512 KiB limit. No allocation at run time. Stack in `render`: 700 bytes
-(EVA's 740, MBIRA's 800).
+Memory: 13,804 bytes of static state (six voices' delay lines and filters), 14 KB of code, the 14 KB SVG; the
+`.knl` is 33.6 KB, far under the Workshop's 512 KiB limit. No allocation at run time. Stack: `render` 588 bytes plus
+at most 60 in the loop it calls (EVA's render 740, MBIRA's 800).
 
 ## Known limitations
 

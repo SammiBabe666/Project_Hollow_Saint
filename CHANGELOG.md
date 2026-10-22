@@ -2,6 +2,18 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## 0.6.1 (speed-up, same sound)
+- Blackfin cycles per voice block (simulator): worst setting 34,969 -> 21,715 (-38 %), defaults-like 29,675 -> 19,705,
+  all knobs at zero 19,626 -> 13,556. Six voices at the worst setting: ~11 % of the core (was ~18 %); 1.07 x EVA.
+- Audio bit-identical to 0.6.0: the 14 host-suite renders and the simulator's 138,240 samples compare equal byte for
+  byte, so presets and recordings are unchanged.
+- How: 16 x 16 products where both operands provably fit int16 (host test builds trap otherwise); the string loop
+  specialised on the sine pair and the grit; the darkening and the bell sum tested per block, not per sample; delay
+  lines in wrap-free runs; the string, drone and buzz loops as separate small functions (short branches to the rare
+  polyBLEP corrections); per-block divisions memoised; branch-free room saturation; interpolator two samples a pass.
+- Build: `-O2` kept (`-O3` measured no faster, larger). New `tools/release.sh`: host tests, simulator bit-exactness,
+  pack, both loaders, refresh `release/` in one command.
+
 ## 0.6.0 build (the first .knl)
 - `release/hollow_saint.knl` built with a Blackfin toolchain (GCC 13.3.0, binutils 2.42) compiled from source
   (`toolchain/build_toolchain.sh`); that toolchain rebuilds 11 of Hundekraft's published plugins byte for byte.

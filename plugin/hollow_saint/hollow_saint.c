@@ -77,8 +77,18 @@
 
 static inline int32_t clampi(int32_t x, int32_t lo, int32_t hi) { return x < lo ? lo : x > hi ? hi : x; }
 static inline int32_t knob(const int16_t *k, int i) { return k[i] < 0 ? 0 : k[i]; }
+#define UNLIKELY(x) __builtin_expect(!!(x), 0)
 static inline uint32_t lcg(uint32_t *s) { return *s = *s * 1664525u + 1013904223u; }
 static inline int32_t sine(uint32_t ph) { return OP1_SINE_TABLE[ph >> 19]; }   /* 8192-entry table, Q15 */
+/* a 16 x 16 product: one cycle on the Blackfin, where an int32 product is a 3-cycle 32 x 32 multiply. Both operands
+ * must fit int16 (the comment at each use says why); the host test builds check it on every call */
+static inline int32_t m16(int32_t a, int32_t b)
+{
+#ifdef OP1_HOST
+    if (a != (int16_t)a || b != (int16_t)b) __builtin_trap();
+#endif
+    return (int32_t)(int16_t)a * (int16_t)b;
+}
 
 /* a 5-point table over a knob (0..32767): t[0] at 0 %, t[4] at 100 %; entries within +-65535 */
 static inline int32_t tab5(const int32_t *t, int32_t k)
@@ -88,17 +98,19 @@ static inline int32_t tab5(const int32_t *t, int32_t k)
     return t[i] + (((t[i + 1] - t[i]) * f) >> 14);
 }
 
-/* polyBLEP sawtooth, +-32768: t = the phase as Q15, dt = the phase step as Q15, inv8 = (2^30 / dt) >> 8 */
+/* polyBLEP sawtooth: t = the phase as Q15, dt = the phase step as Q15 (1 .. 16384), inv8 = (2^30 / dt) >> 8.
+ * Exhaustively checked over every dt and phase: the output stays within -32674 .. 32767 and x within
+ * -32768 .. 32766, so both fit int16 */
 static inline int32_t blep_saw(uint32_t ph, int32_t dt, int32_t inv8)
 {
     const int32_t t = (int32_t)(ph >> 17);
     int32_t s = (int32_t)(ph >> 16) - 32768;
-    if (t < dt) {
+    if (UNLIKELY(t < dt)) {
         const int32_t x = (t * inv8) >> 7;
-        s -= x + x - ((x * x) >> 15) - 32768;
-    } else if (t > 32767 - dt) {
+        s -= x + x - (m16(x, x) >> 15) - 32768;
+    } else if (UNLIKELY(t > 32767 - dt)) {
         const int32_t x = ((t - 32768) * inv8) >> 7;
-        s -= ((x * x) >> 15) + x + x + 32768;
+        s -= (m16(x, x) >> 15) + x + x + 32768;
     }
     return s;
 }
@@ -123,6 +135,23 @@ static inline int32_t svf_coef(int32_t hz)
     const int32_t t3 = (((t * t) >> 15) * t) >> 15;
     return 2 * t - ((t3 * 10923) >> 15);
 }
+
+/* One-entry memos (one per call site and voice) for the per-block divisions: each is a ~100-cycle libgcc call on the
+ * Blackfin, and its input seldom changes from one block to the next. m[0] = the last input (0 = none yet: no input
+ * is 0 here, lp_coef's is clamped first), m[1] = its result */
+static inline int32_t memo_blep_inv(int32_t dt, int32_t *m)
+{
+    if (m[0] != dt) { m[0] = dt; m[1] = blep_inv(dt); }
+    return m[1];
+}
+static inline int32_t memo_lp_coef(int32_t hz, int32_t *m)
+{
+    hz = clampi(hz, 20, 9000);
+    if (m[0] != hz) { m[0] = hz; m[1] = lp_coef(hz); }
+    return m[1];
+}
+/* the room's saturation: two min/max instructions, no branch */
+static inline int16_t sat16(int32_t x) { return (int16_t)clampi(x, -32768, 32767); }
 
 /* ---------------------------------------------------------------- STRINGS: the knob's map (5 points, 0..100 %) */
 static const int32_t T_FLUTE[5] = { 27853, 14746, 0, 0, 0 };             /* hollow sine pair */
@@ -204,6 +233,7 @@ static const int32_t  BELL_W[4]     = { 22938, 16384, 19661, 11469 };
 enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, G_BUZZ, G_WET, G_DRY, G_BODY, G_ROOM, NG };
 #define GAIN(i, sb) (g0[i] + ((dg[i] * (sb)) >> 3))   /* sub-block sb = 1 .. 8 */
 
+enum { M_INV, M_RINV, M_FINV, M_TONE, M_DAMP, M_DARK };
 typedef struct {
     uint32_t ph;                 /* melody string phase (2^32 = one cycle) */
     uint32_t rng;                /* per-voice noise */
@@ -235,15 +265,17 @@ typedef struct {
     uint32_t bph[4];             /* bell partial phases (11.025 kHz) */
     int32_t benv[4];             /* their envelopes, Q23 */
     int32_t up[3];               /* the interpolator's last three 22.05 kHz samples */
+    int32_t memo[6][2];          /* memo_blep_inv / memo_lp_coef, indexed by M_* */
     uint8_t cat_on, bell_pending;
     uint8_t held, fresh;
 } voice_t;
 
 static voice_t V[NV];
 /* scratch for the voice being rendered (render is never re-entered: one audio interrupt) */
-static int32_t hb[HB];           /* the voice at 22.05 kHz */
 static int32_t bodyb[HB];        /* the body combs' output */
 static int32_t roomb[QB];        /* the room at 11.025 kHz */
+static int32_t bellw[QB];        /* the bells' sum at 11.025 kHz */
+static const int32_t bellb[QB];  /* silence, read while no bell rings */
 
 /* shared: block counting (voices render in ascending order, so an index not above the last one starts a new block),
  * each voice's last pitch and the drone owner */
@@ -260,6 +292,149 @@ static volatile int32_t hs_stroke;       /* the wheel's stroke envelope (Q15) */
 static volatile int32_t hs_dog;          /* the dog's lift x the buzz level (Q15) */
 static volatile uint32_t hs_bell_n;      /* bell strikes */
 static volatile int32_t hs_bell_lvl;     /* the last strike's size (Q15) */
+
+/* ---------------------------------------------------------------- the string's loop (section 1 of render) */
+typedef struct { uint32_t pw, doff; int32_t ta, ff, grit, dt, inv8; } string_t;
+static int32_t hb[HB];           /* the voice at 22.05 kHz (scratch for the voice being rendered) */
+
+/* inlined at four call sites with constant flute / rough, so neither is tested per sample */
+static inline __attribute__((always_inline)) void string_run(voice_t *v, const string_t *st, const int32_t *inc,
+                                                             const int32_t *g0, const int32_t *dg, const int flute,
+                                                             const int rough)
+{
+    const uint32_t pw = st->pw, doff = st->doff;
+    const int32_t ta = st->ta, ff = st->ff, grit = st->grit, dt = st->dt, inv8 = st->inv8;
+    const int32_t fq = 10923;                                              /* formant damping: Q = 3 */
+    int32_t mjit = v->mjit;
+    uint32_t ph = v->ph, rng = v->rng;
+    int32_t tone = v->tone, flp = v->flp, fbp = v->fbp;
+    int32_t *o = hb;
+    const int32_t *ip = inc;
+    for (int sb = 1; sb <= 8; sb++) {
+        /* gains: |ga| <= 21852, gp <= 9008, gn <= 1100, gf <= 16392 (the tables x T_LEVEL), so all fit int16 */
+        const int32_t gf = GAIN(G_FLUTE, sb), gr = GAIN(G_REED, sb), gs = GAIN(G_SAW, sb), gn = GAIN(G_NOISE, sb);
+        /* saw * gs + pulse * gr with pulse = (saw - saw2) / 2: two products instead of three */
+        const int32_t ga = gs + (gr >> 1), gp = gr >> 1;
+        const int32_t gbq = (fq * GAIN(G_NASAL, sb)) >> 14;                /* formant: unity at the centre, x2 */
+        for (int n = 0; n < 8; n++, ip += 2) {
+            const uint32_t pold = ph;
+            ph += (uint32_t)ip[0] + (uint32_t)ip[1] + doff;
+            if (rough && UNLIKELY(ph < pold)) mjit = 32767 - (m16((int32_t)(lcg(&rng) >> 17), grit) >> 15);
+            const int32_t saw = blep_saw(ph, dt, inv8);
+            const int32_t saw2 = blep_saw(ph - pw, dt, inv8);              /* the pulse's second edge */
+            int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;               /* +-16384 */
+            nz >>= (ph >= 0x40000000u) << 1;                               /* the slip: noisy; the stick: quiet */
+            int32_t raw = (m16(saw, ga) >> 15) - (m16(saw2, gp) >> 15) + (m16(nz, gn) >> 15);
+            if (flute) {
+                /* negative: a rising saw's fundamental is -sin, so the sine pair adds to the saw and pulse
+                 * instead of cancelling them where they cross-fade */
+                const int32_t fl = -sine(ph) - (m16(sine(ph * 3u), 6554) >> 15);   /* +-39322 */
+                raw += (fl * gf) >> 15;
+            }
+            if (rough) raw = (raw * mjit) >> 15;                           /* grit */
+            tone += (((raw - tone) >> 1) * ta) >> 14;
+            /* nasal formant: Chamberlin SVF on half the raw signal, band output normalised (x fq) and x2 */
+            flp += (ff * fbp) >> 15;
+            const int32_t hp = (raw >> 1) - flp - ((fq * fbp) >> 15);
+            fbp += (ff * hp) >> 15;
+            *o++ = tone + ((fbp * gbq) >> 15);
+        }
+    }
+    v->ph = ph; v->rng = rng; v->mjit = mjit;
+    v->tone = tone; v->flp = flp; v->fbp = fbp;
+}
+
+/* the four variants as functions of their own: kept small, the polyBLEP's rare corrections stay within a short
+ * conditional jump of the loop (in one large render they land beyond it, behind a 5-cycle jump per test) */
+#define STRING_VARIANT(name, flute, rough) \
+    static __attribute__((noinline)) void name(voice_t *v, const string_t *st, const int32_t *inc, const int32_t *g0, \
+                                               const int32_t *dg) { string_run(v, st, inc, g0, dg, flute, rough); }
+STRING_VARIANT(string_plain, 0, 0)
+STRING_VARIANT(string_f, 1, 0)
+STRING_VARIANT(string_r, 0, 1)
+STRING_VARIANT(string_fr, 1, 1)
+
+/* ---------------------------------------------------------------- section 2 of render: the drone and the trompette
+ * (functions of their own for the same reason as the string's) */
+static __attribute__((noinline)) void drone_run(voice_t *v, const uint32_t *ri, const int32_t *g0, const int32_t *dg,
+                                                const int32_t d)
+{
+    const uint32_t r0 = ri[0], f0 = r0 + (r0 >> 1);
+    const uint32_t roff = (uint32_t)((int32_t)(r0 >> 15) * ROOT_DET), foff = (uint32_t)((int32_t)(f0 >> 15) * FIFTH_DET);
+    const int32_t rdt = clampi((int32_t)((r0 + roff) >> 17), 1, 16384), fdt = clampi((int32_t)((f0 + foff) >> 17), 1, 16384);
+    const int32_t rinv = memo_blep_inv(rdt, v->memo[M_RINV]), finv = memo_blep_inv(fdt, v->memo[M_FINV]);
+    const int32_t fifth = tab5(T_DFIFTH, d), sub = tab5(T_DSUB, d);
+    const int32_t fd = svf_coef(tab5(T_DHZ, d)), qd = tab5(T_DQ, d);
+    uint32_t p0 = v->dph[0], p1 = v->dph[1], p2 = v->dph[2];
+    int32_t dlp = v->dlp, dbp = v->dbp;
+    int32_t *b = hb;
+    for (int sb = 1; sb <= 8; sb++) {
+        const int32_t gd = GAIN(G_DRONE, sb);
+        for (int n = 0; n < 8; n++, b++) {
+            const uint32_t r = ri[(sb - 1) * 8 + n];
+            p0 += r + roff;
+            p1 += r + (r >> 1) + foff;
+            p2 += r >> 1;
+            const int32_t x = (blep_saw(p0, rdt, rinv) >> 1) + (m16(blep_saw(p1, fdt, finv), fifth) >> 16);
+            /* resonant two-pole low-pass: Chamberlin SVF on half the signal, low-pass output x2 */
+            dlp += (fd * dbp) >> 15;
+            const int32_t hp = (x >> 1) - dlp - ((qd * dbp) >> 15);
+            dbp += (fd * hp) >> 15;
+            const int32_t y = dlp * 2 + (m16(sine(p2), sub) >> 15);
+            *b += (clampi(y, -65535, 65535) * gd) >> 15;
+        }
+    }
+    v->dph[0] = p0; v->dph[1] = p1; v->dph[2] = p2;
+    v->dinc[0] = r0 + roff; v->dinc[1] = f0 + foff; v->dinc[2] = r0 >> 1;
+    v->dlp = dlp; v->dbp = dbp;
+}
+
+static __attribute__((noinline)) void buzz_run(voice_t *v, const uint32_t *ri, const int32_t *g0, const int32_t *dg,
+                                               const int32_t *senv, const int32_t bz)
+{
+    const int32_t base = tab5(T_BBASE, bz), depth = tab5(T_BSTROKE, bz), jit = tab5(T_BJIT, bz);
+    const int32_t bnz = tab5(T_BNOISE, bz), btone = tab5(T_BTONE, bz);
+    const int32_t fr = svf_coef(tab5(T_BHZ, bz)), rq = tab5(T_BQ, bz);
+    const int32_t tlc = 13693;                                         /* trompette tone low-pass, ~1.9 kHz */
+    /* an octave above the root, folded up to at least ~120 Hz: a trompette never sits lower, and below that the
+     * slaps stop fusing into a buzz and come apart as ticks */
+    int tsh = 1;
+    while (tsh < 6 && (ri[0] << tsh) < TROMP_MIN * 2u) tsh++;
+    uint32_t tph = v->tph, rng = v->rng;
+    int32_t slap = v->slap, rattle = v->rattle, rlp = v->rlp, rbp = v->rbp, tlp = v->tlp, amp = v->amp;
+    int32_t *b = hb;
+    for (int sb = 0; sb < 8; sb++) {
+        /* wheel pressure through the dog's threshold: 0 below it, full 0.4 above it */
+        const int32_t drive = base + ((depth * senv[sb]) >> 15);
+        amp += (clampi(((drive - BUZZ_THRESH) * 5) >> 1, 0, 32767) - amp) >> 1;
+        const int32_t gz = GAIN(G_BUZZ, sb + 1);
+        const int32_t tg = (btone * (19661 + ((amp * 13107) >> 15))) >> 15;   /* string tone 0.6 .. 1 with pressure */
+        for (int n = 0; n < 8; n++, b++) {
+            const uint32_t told = tph;
+            tph += ri[sb * 8 + n] << tsh;
+            if (UNLIKELY(tph < told)) {                                /* a new cycle: the dog slaps */
+                const int32_t u = (int32_t)(lcg(&rng) >> 17);
+                slap = m16(amp, 32767 - (m16(u, jit) >> 15)) >> 15;
+                rattle = m16(slap, bnz) >> 15;
+            }
+            const int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;
+            const int32_t exc = slap + (m16(nz, rattle) >> 14);
+            slap -= slap >> 2;                                         /* ~0.2 ms */
+            rattle -= rattle >> 4;                                     /* ~0.7 ms */
+            /* bridge resonance: SVF band-pass on a quarter of the excitation, normalised (x rq) and x4 */
+            rlp += (fr * rbp) >> 15;
+            const int32_t hp = (exc >> 2) - rlp - ((rq * rbp) >> 15);
+            rbp += (fr * hp) >> 15;
+            const int32_t ring = (rbp * rq) >> 13;
+            /* the trompette's own tone: a plain saw, darkened */
+            tlp += (((((int32_t)(tph >> 16) - 32768) - tlp) >> 1) * tlc) >> 14;
+            const int32_t y = ring + (exc >> 1) + ((tlp * tg) >> 15);
+            *b += (clampi(y, -65535, 65535) * gz) >> 15;
+        }
+    }
+    v->tph = tph; v->tinc = ri[HB - 1] << tsh; v->rng = rng;
+    v->slap = slap; v->rattle = rattle; v->rlp = rlp; v->rbp = rbp; v->tlp = tlp; v->amp = amp;
+}
 
 static void take_drone(int to)
 {
@@ -338,10 +513,18 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         op1_beat_t bc;
         op1_beat_clock(&bc);
         const int32_t len_s = bc.len > 0 ? clampi(bc.len >> 14, 4410, 176400) : 22050;  /* samples per beat */
-        sinc = (0xFFFFFFFFu / (uint32_t)len_s) * STROKES[zone];
+        static int32_t len_memo;                                           /* shared: the same clock for all voices */
+        static uint32_t per_sample;
+        if (len_memo != len_s) { len_memo = len_s; per_sample = 0xFFFFFFFFu / (uint32_t)len_s; }
+        sinc = per_sample * STROKES[zone];
         if (bc.len > 0 && bc.step > 0) {
             const int32_t next_s = clampi(bc.next >> 14, 0, len_s);
-            const uint32_t bp15 = 32768u - (((uint32_t)next_s << 15) / (uint32_t)len_s);   /* beat phase */
+            static int32_t next_memo = -1, nlen_memo;
+            static uint32_t bp15;                                          /* beat phase */
+            if (next_memo != next_s || nlen_memo != len_s) {
+                next_memo = next_s; nlen_memo = len_s;
+                bp15 = 32768u - (((uint32_t)next_s << 15) / (uint32_t)len_s);
+            }
             sp = (bp15 * STROKES[zone]) << 17;
             if (bc.step != 0x100000) sinc = (sinc >> 10) * (uint32_t)(clampi(bc.step, 0, 0x400000) >> 10);
             wheel_free = sp;                                               /* the free phase continues from here */
@@ -365,7 +548,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     int32_t dt = (int32_t)((uint32_t)inc[0] >> 16);                       /* phase step per 22.05 kHz sample, Q15 */
     dt += (dt * drift) >> 15;
     dt = clampi(dt, 1, 16384);
-    const int32_t inv8 = blep_inv(dt);
+    const int32_t inv8 = memo_blep_inv(dt, v->memo[M_INV]);
 
     /* bow pressure from velocity: brighter and noisier when played harder */
     const int32_t vel = op1_voice_vel_gain(self);                          /* Q15 */
@@ -406,52 +589,19 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     int32_t g0[NG], dg[NG];
     for (int i = 0; i < NG; i++) { g0[i] = v->g[i]; dg[i] = t[i] - v->g[i]; v->g[i] = t[i]; }
 
-    /* ======== 1. the string, 22.05 kHz, into hb */
+    /* ======== 1. the string, 22.05 kHz, into hb (the loop specialised on whether the sine pair and the grit run) */
     {
-        const uint32_t pw = (uint32_t)tab5(T_PW, s) << 17;
+        string_t st;
+        st.pw = (uint32_t)tab5(T_PW, s) << 17;
         const int32_t f0x = (dt * 689) >> 10;                              /* the pitch in Hz (dt * 22050 / 32768) */
-        const int32_t ta = lp_coef((tab5(T_LPK, s) * f0x * (bow >> 5)) >> 10);
-        const int32_t ff = svf_coef(tab5(T_FHZ, s));
-        const int32_t fq = 10923;                                          /* formant damping: Q = 3 */
-        const int flute = g0[G_FLUTE] | t[G_FLUTE];                        /* the sine pair only while it is heard */
-        const int32_t grit = tab5(T_GRIT, bz);
-        int32_t mjit = v->mjit;
-        const int rough = grit || mjit != 32767;                           /* grit on, or its last cycle to finish */
-        uint32_t ph = v->ph, rng = v->rng;
-        int32_t tone = v->tone, flp = v->flp, fbp = v->fbp;
-        int32_t *o = hb;
-        const int32_t *ip = inc;
-        for (int sb = 1; sb <= 8; sb++) {
-            const int32_t gf = GAIN(G_FLUTE, sb), gr = GAIN(G_REED, sb), gs = GAIN(G_SAW, sb), gn = GAIN(G_NOISE, sb);
-            /* saw * gs + pulse * gr with pulse = (saw - saw2) / 2: two products instead of three */
-            const int32_t ga = gs + (gr >> 1), gp = gr >> 1;
-            const int32_t gbq = (fq * GAIN(G_NASAL, sb)) >> 14;            /* formant: unity at the centre, x2 */
-            for (int n = 0; n < 8; n++, ip += 2) {
-                const uint32_t pold = ph;
-                ph += (uint32_t)ip[0] + (uint32_t)ip[1] + doff;
-                if (rough && ph < pold) mjit = 32767 - (int32_t)(((lcg(&rng) >> 17) * (uint32_t)grit) >> 15);
-                const int32_t saw = blep_saw(ph, dt, inv8);
-                const int32_t saw2 = blep_saw(ph - pw, dt, inv8);          /* the pulse's second edge */
-                int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;           /* +-16384 */
-                if (ph >= 0x40000000u) nz >>= 2;                           /* the slip: noisy; the stick: quiet */
-                int32_t raw = ((saw * ga) >> 15) - ((saw2 * gp) >> 15) + ((nz * gn) >> 15);
-                if (flute) {
-                    /* negative: a rising saw's fundamental is -sin, so the sine pair adds to the saw and pulse
-                     * instead of cancelling them where they cross-fade */
-                    const int32_t fl = -sine(ph) - ((sine(ph * 3u) * 6554) >> 15);   /* +-39322 */
-                    raw += (fl * gf) >> 15;
-                }
-                if (rough) raw = (raw * mjit) >> 15;                       /* grit */
-                tone += (((raw - tone) >> 1) * ta) >> 14;
-                /* nasal formant: Chamberlin SVF on half the raw signal, band output normalised (x fq) and x2 */
-                flp += (ff * fbp) >> 15;
-                const int32_t hp = (raw >> 1) - flp - ((fq * fbp) >> 15);
-                fbp += (ff * hp) >> 15;
-                *o++ = tone + ((fbp * gbq) >> 15);
-            }
-        }
-        v->ph = ph; v->rng = rng; v->mjit = mjit;
-        v->tone = tone; v->flp = flp; v->fbp = fbp;
+        st.ta = memo_lp_coef((tab5(T_LPK, s) * f0x * (bow >> 5)) >> 10, v->memo[M_TONE]);
+        st.ff = svf_coef(tab5(T_FHZ, s));
+        st.grit = tab5(T_GRIT, bz);
+        st.dt = dt; st.inv8 = inv8; st.doff = doff;
+        const int flute = (g0[G_FLUTE] | t[G_FLUTE]) != 0;                 /* the sine pair only while it is heard */
+        const int rough = st.grit || v->mjit != 32767;                     /* grit on, or its last cycle to finish */
+        if (flute) { if (rough) string_fr(v, &st, inc, g0, dg); else string_f(v, &st, inc, g0, dg); }
+        else       { if (rough) string_r(v, &st, inc, g0, dg); else string_plain(v, &st, inc, g0, dg); }
     }
 
     /* ======== 2. drone and trompette (the owner, and a former owner while it fades out), 22.05 kHz, added to hb */
@@ -465,81 +615,13 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         else for (int m = 0; m < HB; m++) ri[m] = ((uint32_t)inc[2 * m] + (uint32_t)inc[2 * m + 1]) >> 1;
     }
     if (run_drone) {
-        const uint32_t r0 = ri[0], f0 = r0 + (r0 >> 1);
-        const uint32_t roff = (uint32_t)((int32_t)(r0 >> 15) * ROOT_DET), foff = (uint32_t)((int32_t)(f0 >> 15) * FIFTH_DET);
-        const int32_t rdt = clampi((int32_t)((r0 + roff) >> 17), 1, 16384), fdt = clampi((int32_t)((f0 + foff) >> 17), 1, 16384);
-        const int32_t rinv = blep_inv(rdt), finv = blep_inv(fdt);
-        const int32_t fifth = tab5(T_DFIFTH, d), sub = tab5(T_DSUB, d);
-        const int32_t fd = svf_coef(tab5(T_DHZ, d)), qd = tab5(T_DQ, d);
-        uint32_t p0 = v->dph[0], p1 = v->dph[1], p2 = v->dph[2];
-        int32_t dlp = v->dlp, dbp = v->dbp;
-        int32_t *b = hb;
-        for (int sb = 1; sb <= 8; sb++) {
-            const int32_t gd = GAIN(G_DRONE, sb);
-            for (int n = 0; n < 8; n++, b++) {
-                const uint32_t r = ri[(sb - 1) * 8 + n];
-                p0 += r + roff;
-                p1 += r + (r >> 1) + foff;
-                p2 += r >> 1;
-                const int32_t x = (blep_saw(p0, rdt, rinv) >> 1) + ((blep_saw(p1, fdt, finv) * fifth) >> 16);
-                /* resonant two-pole low-pass: Chamberlin SVF on half the signal, low-pass output x2 */
-                dlp += (fd * dbp) >> 15;
-                const int32_t hp = (x >> 1) - dlp - ((qd * dbp) >> 15);
-                dbp += (fd * hp) >> 15;
-                const int32_t y = dlp * 2 + ((sine(p2) * sub) >> 15);
-                *b += (clampi(y, -65535, 65535) * gd) >> 15;
-            }
-        }
-        v->dph[0] = p0; v->dph[1] = p1; v->dph[2] = p2;
-        v->dinc[0] = r0 + roff; v->dinc[1] = f0 + foff; v->dinc[2] = r0 >> 1;
-        v->dlp = dlp; v->dbp = dbp;
+        drone_run(v, ri, g0, dg, d);
     } else {
         /* not running: its phases did not move this block, so a copy from it needs no rewind */
         v->dinc[0] = v->dinc[1] = v->dinc[2] = 0;
     }
     if (run_buzz) {
-        const int32_t base = tab5(T_BBASE, bz), depth = tab5(T_BSTROKE, bz), jit = tab5(T_BJIT, bz);
-        const int32_t bnz = tab5(T_BNOISE, bz), btone = tab5(T_BTONE, bz);
-        const int32_t fr = svf_coef(tab5(T_BHZ, bz)), rq = tab5(T_BQ, bz);
-        const int32_t tlc = 13693;                                         /* trompette tone low-pass, ~1.9 kHz */
-        /* an octave above the root, folded up to at least ~120 Hz: a trompette never sits lower, and below that the
-         * slaps stop fusing into a buzz and come apart as ticks */
-        int tsh = 1;
-        while (tsh < 6 && (ri[0] << tsh) < TROMP_MIN * 2u) tsh++;
-        uint32_t tph = v->tph, rng = v->rng;
-        int32_t slap = v->slap, rattle = v->rattle, rlp = v->rlp, rbp = v->rbp, tlp = v->tlp, amp = v->amp;
-        int32_t *b = hb;
-        for (int sb = 0; sb < 8; sb++) {
-            /* wheel pressure through the dog's threshold: 0 below it, full 0.4 above it */
-            const int32_t drive = base + ((depth * senv[sb]) >> 15);
-            amp += (clampi(((drive - BUZZ_THRESH) * 5) >> 1, 0, 32767) - amp) >> 1;
-            const int32_t gz = GAIN(G_BUZZ, sb + 1);
-            const int32_t tg = (btone * (19661 + ((amp * 13107) >> 15))) >> 15;   /* string tone 0.6 .. 1 with pressure */
-            for (int n = 0; n < 8; n++, b++) {
-                const uint32_t told = tph;
-                tph += ri[sb * 8 + n] << tsh;
-                if (tph < told) {                                          /* a new cycle: the dog slaps */
-                    const int32_t u = (int32_t)(lcg(&rng) >> 17);
-                    slap = (amp * (32767 - ((u * jit) >> 15))) >> 15;
-                    rattle = (slap * bnz) >> 15;
-                }
-                const int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;
-                const int32_t exc = slap + ((nz * rattle) >> 14);
-                slap -= slap >> 2;                                         /* ~0.2 ms */
-                rattle -= rattle >> 4;                                     /* ~0.7 ms */
-                /* bridge resonance: SVF band-pass on a quarter of the excitation, normalised (x rq) and x4 */
-                rlp += (fr * rbp) >> 15;
-                const int32_t hp = (exc >> 2) - rlp - ((rq * rbp) >> 15);
-                rbp += (fr * hp) >> 15;
-                const int32_t ring = (rbp * rq) >> 13;
-                /* the trompette's own tone: a plain saw, darkened */
-                tlp += (((((int32_t)(tph >> 16) - 32768) - tlp) >> 1) * tlc) >> 14;
-                const int32_t y = ring + (exc >> 1) + ((tlp * tg) >> 15);
-                *b += (clampi(y, -65535, 65535) * gz) >> 15;
-            }
-        }
-        v->tph = tph; v->tinc = ri[HB - 1] << tsh; v->rng = rng;
-        v->slap = slap; v->rattle = rattle; v->rlp = rlp; v->rbp = rbp; v->tlp = tlp; v->amp = amp;
+        buzz_run(v, ri, g0, dg, senv, bz);
     } else {
         v->tinc = 0;
     }
@@ -565,18 +647,26 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         }
         /* body combs on an eighth of the voice: |x| <= 8191, feedback <= 0.7, so |y| <= 27304 (int16, no saturation) */
         {
-            const int32_t bfb = tab5(T_CBFB, c);
-            int16_t *cb1 = v->cb1, *cb2 = v->cb2;
-            unsigned ib1 = v->ib1, ib2 = v->ib2;
-            for (int m = 0; m < HB; m++) {
-                const int32_t x = hb[m] >> 3;
-                const int32_t y1 = x + ((bfb * cb1[ib1]) >> 15);
-                const int32_t y2 = x - ((bfb * cb2[ib2]) >> 15);           /* inverted: odd resonances, hollow */
-                cb1[ib1] = (int16_t)y1; if (++ib1 >= CB1) ib1 = 0;
-                cb2[ib2] = (int16_t)y2; if (++ib2 >= CB2) ib2 = 0;
-                bodyb[m] = (y1 + y2) >> 1;
+            const int32_t bfb = tab5(T_CBFB, c);                           /* <= 22938 */
+            int16_t *p1 = v->cb1 + v->ib1, *p2 = v->cb2 + v->ib2;
+            int16_t *const e1 = v->cb1 + CB1, *const e2 = v->cb2 + CB2;
+            /* in runs that end where a line wraps (at most three per block), so the sample loop has no wrap test */
+            for (int m = 0; m < HB; ) {
+                int n = HB - m;
+                if (e1 - p1 < n) n = e1 - p1;
+                if (e2 - p2 < n) n = e2 - p2;
+                for (const int end = m + n; m < end; m++) {
+                    const int32_t x = hb[m] >> 3;
+                    const int32_t y1 = x + (m16(bfb, *p1) >> 15);
+                    const int32_t y2 = x - (m16(bfb, *p2) >> 15);          /* inverted: odd resonances, hollow */
+                    *p1++ = (int16_t)y1;
+                    *p2++ = (int16_t)y2;
+                    bodyb[m] = (y1 + y2) >> 1;
+                }
+                if (p1 == e1) p1 = v->cb1;
+                if (p2 == e2) p2 = v->cb2;
             }
-            v->ib1 = (uint16_t)ib1; v->ib2 = (uint16_t)ib2;
+            v->ib1 = (uint16_t)(p1 - v->cb1); v->ib2 = (uint16_t)(p2 - v->cb2);
         }
         /* the bell partials (11.025 kHz increments; partials above ~4.4 kHz left out), then the room */
         {
@@ -589,33 +679,50 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 if (u >= 0x1999999Au) { v->benv[j] = 0; continue; }
                 binc[nb] = u << 2; bph[nb] = v->bph[j]; benv[nb] = v->benv[j]; nb++;
             }
-            const int32_t rfb = tab5(T_CRFB, c);
-            const int32_t rdamp = lp_coef(tab5(T_CDAMP, c) * 2);           /* the coefficient at 11.025 kHz */
-            int16_t *ca1 = v->ca1, *ca2 = v->ca2, *cr = v->cr;
-            unsigned ia1 = v->ia1, ia2 = v->ia2, ir = v->ir;
-            int32_t rdl = v->rdl;
-            for (int q = 0; q < QB; q++) {
-                int32_t x = (bodyb[2 * q] + bodyb[2 * q + 1]) >> 3;        /* |x| <= 6826 */
-                if (nb) {
-                    int32_t bsum = 0;
-                    for (int j = 0; j < nb; j++) {
-                        bph[j] += binc[j];
-                        bsum += (sine(bph[j]) * (benv[j] >> 8)) >> 15;
-                    }
-                    x += bsum >> 4;
+            /* the bells summed first, partial by partial (bellb stays all zero while no bell rings). Each term is at
+             * most benv >> 8 <= 6299 (a strike <= 8999 x BELL_W), so the sum stays within +-19346 and its sixteenth
+             * within +-1210; sine and benv >> 8 fit int16 */
+            const int32_t *bl = bellb;
+            if (nb) {
+                for (int q = 0; q < QB; q++) bellw[q] = 0;
+                for (int j = 0; j < nb; j++) {
+                    uint32_t ph = bph[j];
+                    const uint32_t bi = binc[j];
+                    const int32_t e = benv[j] >> 8;
+                    for (int q = 0; q < QB; q++) { ph += bi; bellw[q] += m16(sine(ph), e) >> 15; }
+                    bph[j] = ph;
                 }
-                int32_t a = ca1[ia1];
-                int32_t w = x - ((AP_G * a) >> 15);
-                int32_t z = a + ((AP_G * w) >> 15);
-                ca1[ia1] = op1_sat16(w); if (++ia1 >= CA1) ia1 = 0;
-                a = ca2[ia2];
-                w = z - ((AP_G * a) >> 15);
-                z = a + ((AP_G * w) >> 15);
-                ca2[ia2] = op1_sat16(w); if (++ia2 >= CA2) ia2 = 0;
-                const int32_t r = cr[ir];
-                rdl += (((r - rdl) >> 1) * rdamp) >> 14;
-                cr[ir] = op1_sat16(z + ((rfb * rdl) >> 15)); if (++ir >= CR) ir = 0;
-                roomb[q] = r;
+                bl = bellw;
+            }
+            const int32_t rfb = tab5(T_CRFB, c);
+            const int32_t rdamp = memo_lp_coef(tab5(T_CDAMP, c) * 2, v->memo[M_DAMP]);   /* the coefficient at 11.025 kHz */
+            int16_t *pa1 = v->ca1 + v->ia1, *pa2 = v->ca2 + v->ia2, *pr = v->cr + v->ir;
+            int16_t *const ea1 = v->ca1 + CA1, *const ea2 = v->ca2 + CA2, *const er = v->cr + CR;
+            int32_t rdl = v->rdl;
+            for (int q = 0; q < QB; ) {                                    /* in runs between wraps, as above */
+                int n = QB - q;
+                if (ea1 - pa1 < n) n = ea1 - pa1;
+                if (ea2 - pa2 < n) n = ea2 - pa2;
+                if (er - pr < n) n = er - pr;
+                for (const int end = q + n; q < end; q++) {
+                    /* |x| <= 6826 + 1210; the first diffuser's w then stays within +-27697: its products fit int16 */
+                    const int32_t x = ((bodyb[2 * q] + bodyb[2 * q + 1]) >> 3) + (bl[q] >> 4);
+                    int32_t a = *pa1;
+                    int32_t w = x - (m16(AP_G, a) >> 15);
+                    int32_t z = a + (m16(AP_G, w) >> 15);
+                    *pa1++ = sat16(w);
+                    a = *pa2;
+                    w = z - (m16(AP_G, a) >> 15);
+                    z = a + ((AP_G * w) >> 15);                            /* w here can exceed int16 */
+                    *pa2++ = sat16(w);
+                    const int32_t r = *pr;
+                    rdl += (((r - rdl) >> 1) * rdamp) >> 14;
+                    *pr++ = sat16(z + ((rfb * rdl) >> 15));
+                    roomb[q] = r;
+                }
+                if (pa1 == ea1) pa1 = v->ca1;
+                if (pa2 == ea2) pa2 = v->ca2;
+                if (pr == er) pr = v->cr;
             }
             /* bell envelopes: decayed per block (the shift per sample x 32) */
             for (int j = 0, i = 0; j < 4; j++) {
@@ -625,7 +732,8 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 for (int r = 0; r < QB; r += 8) e -= (e >> (BELL_DECAY[j] - 3)) + 8;   /* 4 steps of 8 samples */
                 v->benv[j] = e < 256 ? 0 : e;
             }
-            v->ia1 = (uint16_t)ia1; v->ia2 = (uint16_t)ia2; v->ir = (uint16_t)ir; v->rdl = rdl;
+            v->ia1 = (uint16_t)(pa1 - v->ca1); v->ia2 = (uint16_t)(pa2 - v->ca2); v->ir = (uint16_t)(pr - v->cr);
+            v->rdl = rdl;
         }
         /* mix: dry x gdry + (body x gbody + room x groom) x gwet; the body is an eighth of the voice and the room a
          * sixteenth of the body pair, so x8 (>> 12) and x16 (>> 11) restore the scale */
@@ -638,8 +746,9 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                     const int m = (sb - 1) * 8 + n, q = m >> 1;
                     const int32_t r1 = roomb[q], r0 = (rp + r1) >> 1;      /* the room back to 22.05 kHz */
                     rp = r1;
-                    hb[m]     = ((hb[m] * gdry) >> 15) + ((bodyb[m] * gbw) >> 12) + ((r0 * grw) >> 11);
-                    hb[m + 1] = ((hb[m + 1] * gdry) >> 15) + ((bodyb[m + 1] * gbw) >> 12) + ((r1 * grw) >> 11);
+                    /* bodyb within +-27304, gbw <= 32767, the room int16, grw <= 39322 x 20316 >> 15 = 24380 */
+                    hb[m]     = ((hb[m] * gdry) >> 15) + (m16(bodyb[m], gbw) >> 12) + (m16(r0, grw) >> 11);
+                    hb[m + 1] = ((hb[m + 1] * gdry) >> 15) + (m16(bodyb[m + 1], gbw) >> 12) + (m16(r1, grw) >> 11);
                 }
             }
             v->roomp = rp;
@@ -652,19 +761,29 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
      * swelling the string; 22.05 kHz */
     {
         const int32_t kd = clampi((c - 8192) * 2, 0, 32767);
-        const int32_t dcoef = 32767 - (((32767 - lp_coef(tab5(T_CDARK, c))) * kd) >> 15);   /* 32767: transparent */
+        const int32_t dcoef = 32767 - (((32767 - memo_lp_coef(tab5(T_CDARK, c), v->memo[M_DARK])) * kd) >> 15);   /* 32767: transparent */
         const int32_t swell = tab5(T_SWELL, bz);
         int32_t dark = v->dark, dc8 = v->dc8;
         for (int sb = 1; sb <= 8; sb++) {
             int32_t go = GAIN(G_OUT, sb);
             go += (go * ((swell * senv[sb - 1]) >> 15)) >> 15;
-            for (int n = 0; n < 8; n++) {
-                const int m = (sb - 1) * 8 + n;
-                int32_t y = clampi(hb[m], -65535, 65535);
-                if (kd) { dark += (((y - dark) >> 1) * dcoef) >> 14; y = dark; } else dark = y;
-                dc8 += (y * 256 - dc8) >> 8;
-                y -= dc8 >> 8;
-                hb[m] = clampi((y * go) >> 15, -26000, 26000);             /* the interpolator then stays in int16 */
+            int32_t *h = hb + (sb - 1) * 8;
+            if (kd) {
+                for (int n = 0; n < 8; n++) {
+                    int32_t y = clampi(h[n], -65535, 65535);
+                    dark += (((y - dark) >> 1) * dcoef) >> 14; y = dark;
+                    dc8 += (y * 256 - dc8) >> 8;
+                    y -= dc8 >> 8;
+                    h[n] = clampi((y * go) >> 15, -26000, 26000);          /* the interpolator then stays in int16 */
+                }
+            } else {
+                for (int n = 0; n < 8; n++) {
+                    int32_t y = clampi(h[n], -65535, 65535);
+                    dark = y;
+                    dc8 += (y * 256 - dc8) >> 8;
+                    y -= dc8 >> 8;
+                    h[n] = clampi((y * go) >> 15, -26000, 26000);
+                }
             }
         }
         v->dark = dark; v->dc8 = dc8;
@@ -674,11 +793,15 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
      * ((-a + 9 b + 9 c - d) / 16, |out| <= 26000 x 20 / 16 = 32500: int16 without saturation) */
     {
         int32_t a = v->up[0], b = v->up[1], cc = v->up[2];
-        for (int m = 0; m < HB; m++) {
-            const int32_t d2 = hb[m];
-            out[2 * m] = (int16_t)b;
-            out[2 * m + 1] = (int16_t)((((b + cc) * 9) - a - d2) >> 4);
-            a = b; b = cc; cc = d2;
+        const int32_t *h = hb;
+        int16_t *o = out;
+        for (int m = 0; m < HB; m += 2, h += 2, o += 4) {                 /* two samples per pass */
+            const int32_t d0 = h[0], d1 = h[1];
+            o[0] = (int16_t)b;
+            o[1] = (int16_t)((((b + cc) * 9) - a - d0) >> 4);
+            o[2] = (int16_t)cc;
+            o[3] = (int16_t)((((cc + d0) * 9) - b - d1) >> 4);
+            a = cc; b = d0; cc = d1;
         }
         v->up[0] = a; v->up[1] = b; v->up[2] = cc;
     }
