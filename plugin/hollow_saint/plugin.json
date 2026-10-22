@@ -20,5 +20,9 @@
     0,
     0,
     16384
-  ]
+  ],
+  "screen": {
+    "svg": "hollow_saint.svg",
+    "symbol": "SCREEN_hollow_saint"
+  }
 }

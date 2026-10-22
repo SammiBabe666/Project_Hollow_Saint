@@ -68,6 +68,7 @@
  * NOTICE of the kennel SDK). The polyBLEP saw follows the formulation in Hundekraft's EVA (eva.c, same licence).
  */
 #include "op1_plugin.h"
+#include "hollow_saint_geom.h"
 
 #define NV  OP1_VOICES
 #define BLK OP1_BLOCK                    /* 128 output samples per render call (44.1 kHz) */
@@ -253,6 +254,12 @@ static int owner = -1;
 /* shared wheel: the stroke phase when the beat clock is not moving (advanced once per block) */
 static uint32_t wheel_free;
 static uint8_t wheel_new_block;
+/* for the screen (written by the audio interrupt, read by the GUI thread; display only) */
+static volatile uint32_t hs_blocks;      /* voice renders: changes while anything sounds */
+static volatile int32_t hs_stroke;       /* the wheel's stroke envelope (Q15) */
+static volatile int32_t hs_dog;          /* the dog's lift x the buzz level (Q15) */
+static volatile uint32_t hs_bell_n;      /* bell strikes */
+static volatile int32_t hs_bell_lvl;     /* the last strike's size (Q15) */
 
 static void take_drone(int to)
 {
@@ -542,6 +549,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     if (v->bell_pending) {
         v->bell_pending = 0;
         const int32_t bl = (tab5(T_CBELL, c) * vel) >> 15;
+        if (bl) { hs_bell_lvl = bl; hs_bell_n++; }
         for (int j = 0; j < 4; j++) { v->bph[j] = 0; v->benv[j] = bl ? ((bl * BELL_W[j]) >> 15) << 8 : 0; }
     }
     const int bells = (v->benv[0] | v->benv[1] | v->benv[2] | v->benv[3]) != 0;
@@ -675,7 +683,176 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         v->up[0] = a; v->up[1] = b; v->up[2] = cc;
     }
     v_blk[vi] = blk;
+    hs_blocks++;
+    if (vi == owner) {
+        hs_stroke = senv[4];
+        hs_dog = run_buzz ? (v->amp * t[G_BUZZ]) >> 15 : 0;
+    }
 }
 
 const op1_engine_t ENGINE_hollow_saint = { hs_note_on, hs_render, hs_note_off,
                                            { OP1_PRESS_PAGE, OP1_PRESS_NONE, OP1_PRESS_PAGE, OP1_PRESS_NONE } };
+
+/* ======================= screen (GUI thread) =======================
+ * hollow_saint.svg (tools/gen_screen.py; positions in hollow_saint_geom.h): a hurdy-gurdy seen from above in a gothic
+ * arch. Moving parts:
+ *   wheel, crank   turn while notes sound, surging on the wheel strokes, coasting to a stop after the last note
+ *   s0 .. s4       the strings (drone, drone, melody, melody, trompette) part to show them vibrate: drones with DRONE,
+ *                  the melody strings with STRINGS, the trompette with the dog's lift
+ *   dog            rattles with the buzz
+ *   kp0 .. kp5     a lit key for each held note (its pitch on the instrument's two chromatic octaves from G)
+ *   p0 .. p7       the rose window's petals: CATHEDRAL lights them one by one
+ *   halo, bell     the saint's halo widens with CATHEDRAL and flares at a bell strike; the bell swings
+ *   m0 .. m3       the four knob meters; blue page 2 shows kbd + kdot (the drone key, or the FOLLOW arrow), white
+ *                  page 2 shows r0 .. r4 (the stroke rate: steady, 1/4, 1/8, 1/8T, 1/16) */
+#define ONE 1024
+static void *n_wheel, *n_crank, *n_dog, *n_bell, *n_halo, *n_kbd, *n_kdot;
+static void *n_m[4], *n_p[8], *n_s[5], *n_kp[6], *n_r[5];
+static uint32_t sc_last_blocks, sc_bell_n, sc_seed = 0x2F6E2B1u;
+static int32_t sc_act, sc_wang, sc_wvel, sc_bang, sc_bvel, sc_glow;
+
+static inline uint32_t sc_rnd(void) { return (sc_seed = sc_seed * 1664525u + 1013904223u) >> 17; }   /* 0 .. 32767 */
+static void sc_move(void *n, int32_t tx, int32_t ty)                 /* Q10 */
+{
+    if (!n) return;
+    const int32_t m[9] = { ONE, 0, 0, 0, ONE, 0, tx, ty, ONE };
+    op1_node_set_transform(n, m);
+}
+static void sc_scale(void *n, int32_t sx, int32_t sy, int32_t cx, int32_t cy)   /* about (cx, cy) in SVG units, Q10 */
+{
+    if (!n) return;
+    const int32_t m[9] = { sx, 0, 0, 0, sy, 0, cx * (ONE - sx), cy * (ONE - sy), ONE };
+    op1_node_set_transform(n, m);
+}
+static void sc_rotate(void *n, int32_t ang, int32_t cx, int32_t cy)  /* ang: Q16 of a turn */
+{
+    if (!n) return;
+    const uint32_t i = ((uint32_t)ang >> 3) & 8191;
+    op1_node_rotate(n, cx * ONE, cy * ONE, OP1_SINE_TABLE[i], OP1_SINE_TABLE[(i + 2048) & 8191]);
+}
+static void sc_show(void *n, int on) { if (n) op1_node_set_visible(n, on); }
+
+/* the key a pitch falls on: semitones above G3, folded into the instrument's 24 keys */
+static int sc_key(uint32_t inc)
+{
+    static const uint32_t G3 = 19088521u;                             /* G3 increment at 44.1 kHz */
+    /* half-semitone boundaries above G3 within an octave: G3 * 2^((k + 0.5) / 12), k = 0 .. 11 */
+    static const uint32_t B[12] = { 19647858u, 20816180u, 22053975u, 23365372u, 24754749u, 26226743u,
+                                    27786267u, 29438524u, 31189030u, 33043626u, 35008502u, 37090216u };
+    int oct = 0;
+    while (inc >= 2u * G3 && oct < 8) { inc >>= 1; oct++; }
+    while (inc < G3 && oct > -8) { inc <<= 1; oct--; }
+    int k = 0;
+    while (k < 12 && inc >= B[k]) k++;
+    const int semis = 12 * oct + k;                                    /* k = 12: the next G */
+    return ((semis % 24) + 24) % 24;
+}
+
+static void hs_screen_init(void *scr)
+{
+    static const char *const m[4] = { "m0", "m1", "m2", "m3" };
+    static const char *const p[8] = { "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7" };
+    static const char *const st[5] = { "s0", "s1", "s2", "s3", "s4" };
+    static const char *const kp[6] = { "kp0", "kp1", "kp2", "kp3", "kp4", "kp5" };
+    static const char *const r[5] = { "r0", "r1", "r2", "r3", "r4" };
+    n_wheel = op1_find_node(scr, "wheel");
+    n_crank = op1_find_node(scr, "crank");
+    n_dog = op1_find_node(scr, "dog");
+    n_bell = op1_find_node(scr, "bell");
+    n_halo = op1_find_node(scr, "halo");
+    n_kbd = op1_find_node(scr, "kbd");
+    n_kdot = op1_find_node(scr, "kdot");
+    for (int i = 0; i < 4; i++) n_m[i] = op1_find_node(scr, m[i]);
+    for (int i = 0; i < 8; i++) n_p[i] = op1_find_node(scr, p[i]);
+    for (int i = 0; i < 5; i++) n_s[i] = op1_find_node(scr, st[i]);
+    for (int i = 0; i < 6; i++) { n_kp[i] = op1_find_node(scr, kp[i]); sc_show(n_kp[i], 0); }
+    for (int i = 0; i < 5; i++) { n_r[i] = op1_find_node(scr, r[i]); sc_show(n_r[i], 0); }
+    sc_show(n_kbd, 0); sc_show(n_kdot, 0);
+}
+
+static void hs_screen_update(void *scr, int dt)
+{
+    const int slot = OP1_SCREEN_SLOT & 7;
+    int16_t kn[4];
+    op1_synth_knobs_live(slot, kn);
+    int32_t k[4];
+    for (int i = 0; i < 4; i++) k[i] = kn[i] < 0 ? 0 : kn[i];
+    const int16_t *words = op1_synth_knobs(slot);
+
+    /* activity: the audio has rendered since the last frame */
+    const uint32_t blocks = hs_blocks;
+    const int on = blocks != sc_last_blocks;
+    sc_last_blocks = blocks;
+    sc_act += ((on ? 32767 : 0) - sc_act) >> 3;
+
+    /* the wheel: ~1 turn a second while playing, up to ~2.4 on a stroke, coasting down after the last note */
+    const int32_t stroke = on ? hs_stroke : 0;
+    const int32_t target = (sc_act * (1092 + ((((stroke * k[2]) >> 15) * 1500) >> 15))) >> 15;   /* Q16 turn / frame */
+    sc_wvel += (target - sc_wvel) >> (target > sc_wvel ? 3 : 5);
+    sc_wang += sc_wvel;
+    sc_rotate(n_wheel, sc_wang, HS_WHEEL_X, HS_WHEEL_Y);
+    sc_rotate(n_crank, sc_wang, HS_CRANK_X, HS_CRANK_Y);
+
+    /* strings: part their arcs (0.15 .. ~2.6 x 0.6 px), with a shimmer */
+    const int32_t dog = on ? hs_dog : 0;
+    int32_t amp[5];
+    amp[0] = amp[1] = (sc_act * ((k[0] * 2200) >> 15)) >> 15;
+    amp[2] = amp[3] = (sc_act * (900 + ((k[1] * 1100) >> 15))) >> 15;
+    amp[4] = ((sc_act * 300) >> 15) + ((dog * 2400) >> 15);
+    for (int i = 0; i < 5; i++) {
+        const int32_t sy = 154 + ((amp[i] * (24000 + (int32_t)(sc_rnd() >> 2))) >> 15);
+        sc_scale(n_s[i], ONE, sy, 0, HS_STRING_Y[i]);
+    }
+    /* the dog rattles: a random lift up to ~1.5 px with the buzz */
+    sc_move(n_dog, 0, -(int32_t)(((sc_rnd() * (uint32_t)dog) >> 15) * 1536 >> 15));
+
+    /* lit keys: one per held voice */
+    for (int i = 0; i < 6; i++) {
+        const int lit = V[i].held && v_inc[i];
+        sc_show(n_kp[i], lit);
+        if (lit) sc_move(n_kp[i], HS_KEY_X[sc_key(v_inc[i])] * (ONE / 4), 0);
+    }
+
+    /* CATHEDRAL: petals, the halo, the bell */
+    const int petals = (int)((k[3] * 8 + 16383) >> 15);
+    for (int i = 0; i < 8; i++) sc_show(n_p[i], i < petals);
+    if (hs_bell_n != sc_bell_n) {                                     /* a strike: the bell swings, the halo flares */
+        sc_bell_n = hs_bell_n;
+        sc_bvel += 120 + ((hs_bell_lvl * 400) >> 15);
+        sc_glow = 32767;
+    }
+    sc_bvel -= sc_bang >> 7;                                           /* a heavy pendulum (~1.2 s), slowly damped */
+    sc_bvel -= sc_bvel >> 6;
+    sc_bang = clampi(sc_bang + sc_bvel, -4600, 4600);                  /* at most ~25 degrees */
+    sc_rotate(n_bell, sc_bang, HS_BELL_X, HS_BELL_Y);
+    sc_glow -= sc_glow >> 4;
+    const int32_t hs = 870 + ((k[3] * 260) >> 15) + ((sc_glow * 120) >> 15);
+    sc_scale(n_halo, hs, hs, HS_HALO_X, HS_HALO_Y);
+
+    /* meters, and the page-2 icons in place of the blue and white meters */
+    const int pg0 = op1_eng_page[0] != 0, pg2 = op1_eng_page[2] != 0;
+    for (int i = 0; i < 4; i++) {
+        const int hide = (i == 0 && pg0) || (i == 2 && pg2);
+        sc_show(n_m[i], !hide);
+        if (!hide) sc_scale(n_m[i], (k[i] * ONE) >> 15, ONE, HS_METER_X[i], HS_METER_Y);
+    }
+    sc_show(n_kbd, pg0); sc_show(n_kdot, pg0);
+    if (pg0) {
+        const int key = drone_key(words);
+        /* C .. B on the icon: naturals in the lower half, sharps on the dividing lines; FOLLOW above the arrow */
+        static const int8_t KX[12] = { 0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6 };
+        static const uint8_t SHARP[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
+        if (!key) sc_move(n_kdot, (HS_KBD_X - 8) * ONE, (HS_KBD_Y - 3) * ONE);
+        else {
+            const int pc = key - 1;
+            const int32_t x = HS_KBD_X * ONE + KX[pc] * HS_KBD_W * ONE + (SHARP[pc] ? 0 : HS_KBD_W * ONE / 2);
+            sc_move(n_kdot, x, (HS_KBD_Y + (SHARP[pc] ? 3 : 9)) * ONE);
+        }
+    }
+    const int zone = stroke_zone(words);
+    for (int i = 0; i < 5; i++) sc_show(n_r[i], pg2 && i == zone);
+
+    op1_screen_draw(scr, dt);
+}
+
+const op1_screen_t SCREEN_hollow_saint = { hs_screen_init, hs_screen_update };
