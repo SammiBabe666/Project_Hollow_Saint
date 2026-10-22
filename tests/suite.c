@@ -245,6 +245,17 @@ static void sc_vibrato(void)      /* per-sample pitch movement (LFO / bend): the
     for (int b = 0; b < blocks_of(3.0); b++) { bend_cents = 60 * sin(b * 0.06); run_blocks(1); }
     bend_cents = 0; all_off(); hold(0.6);
 }
+static void sc_handover(void)     /* drone ownership moving: legato up, a lower note, staccato, a chord, its bass off */
+{
+    note_on(62, 110); hold(0.5);
+    note_on(65, 110); hold(0.1); note_off(62); hold(0.5);      /* higher note joins; owner moves at the release */
+    note_on(60, 110); hold(0.1); note_off(65); hold(0.5);      /* lower note: takes the drone at once */
+    note_off(60); hold(0.15);                                   /* staccato gap: the released owner keeps it */
+    note_on(67, 110); hold(0.5);
+    note_on(55, 110); note_on(59, 110); note_on(62, 110); hold(0.6);   /* chord: the bass (55) owns it */
+    note_off(55); hold(0.6);                                    /* bass off: hand-over to 59 */
+    all_off(); hold(1.0);
+}
 static void sc_long(void)         /* 20 s hold at maximum everything: runaway / drift */
 {
     for (int k = 0; k < 4; k++) knobs[k] = 32767;
@@ -266,6 +277,7 @@ static scen_t scen[] = {
     { "extreme", sc_extreme, 40000, 0, 0, 0 },
     { "vibrato", sc_vibrato, 32767, 0, 0, 0 },
     { "long",    sc_long,    40000, 1, 2.0, 20.0 },
+    { "handover", sc_handover, 32767, 0, 0, 0 },
 };
 
 int main(int argc, char **argv)
@@ -279,7 +291,11 @@ int main(int argc, char **argv)
         reset_all();
         for (int k = 0; k < 4; k++) knobs[k] = DEF[k];
         const char *ov = getenv("KNOBS");                 /* KNOBS=a,b,c,d: other starting knobs */
-        if (ov) { int a[4]; if (sscanf(ov, "%d,%d,%d,%d", &a[0], &a[1], &a[2], &a[3]) == 4) for (int k = 0; k < 4; k++) knobs[k] = (int16_t)a[k]; }
+        if (ov) {                                         /* 4 knobs, optionally page-2 words 5..7 */
+            int a[7] = { 0 }; int m = sscanf(ov, "%d,%d,%d,%d,%d,%d,%d", &a[0], &a[1], &a[2], &a[3], &a[4], &a[5], &a[6]);
+            for (int k = 0; k < m && k < 4; k++) knobs[k] = (int16_t)a[k];
+            for (int k = 4; k < m; k++) knobs[k + 1] = (int16_t)a[k];
+        }
         scen[s].fn();
         write_wav(scen[s].name);
         int32_t peak = 0; double sum = 0;

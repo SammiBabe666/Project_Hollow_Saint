@@ -1,8 +1,11 @@
 /* Cathedral of the Hollow Saint (plugin id hollow_saint): a hurdy-gurdy for the original OP-1, kennel synth plugin.
  *
- * Milestone 2: the melody string (chanterelle) only.
+ * Milestone 3: melody string + drone.
+ *   blue  (knob 0) DRONE: off (0) .. subtle and dark .. rich and resonant (middle) .. dense, with a sub-octave (high).
+ *                  Push for page 2: the drone's tuning, FOLLOW (the lowest held note) or a fixed key C .. B (word 5).
  *   green (knob 1) STRINGS: soft hollow, almost flute-like (low) .. nasal hurdy-gurdy (middle) .. bright and cutting
- *                  (high). Not yet: blue DRONE, white WHEEL BUZZ, orange CATHEDRAL (they have no effect yet).
+ *                  (high).
+ *   Not yet: white WHEEL BUZZ, orange CATHEDRAL (no effect yet).
  *
  * The string: a bowed string's waveform is close to a sawtooth (Helmholtz motion); its nasal reedy colour comes from a
  * narrow pulse and the instrument body. Per sample: a polyBLEP saw, a polyBLEP pulse (two saws, one offset by the pulse
@@ -10,6 +13,17 @@
  * the moment the string slips under the wheel (the first quarter of each cycle) and quieter while it sticks. Then a
  * one-pole tone low-pass that follows the pitch and a Chamberlin band-pass "nasal formant" around 0.9 .. 2.1 kHz.
  * A slow random pitch drift (a few cents per voice) keeps it organic.
+ *
+ * The drone (bourdons): two bowed drone strings, root and fifth (+2 / -3 cents: they beat slowly), polyBLEP saws
+ * through a resonant two-pole low-pass, plus a sine an octave below the root at high settings. The OP-1 gives an engine
+ * only its voices, each multiplied by its own envelope after render, so a drone cannot run on its own: it sounds while
+ * a note sounds. Within that, ONE voice owns the drone at a time: the held voice with the lowest pitch (none held: the
+ * last owner keeps it through its release). A chord gets one drone, not six, and only that voice pays for it. When
+ * ownership moves, the new owner copies the old one's oscillator and filter state (rewound to the start of the block
+ * when the old owner has already rendered it) and the two cross-fade over ~40 ms: with a fixed key the hand-over is
+ * seamless (same pitch, same phase); in FOLLOW it glides to the new bass note's drone.
+ *   FOLLOW: root an octave below the owner's note, fifth above that root (the note itself is the root's octave).
+ *   Fixed key: root in octave 2 (C2 .. B2), fifth above; it ignores the played notes, octave and transpose.
  *
  * Fixed point: Q15 throughout (32768 = 1.0); signals stay within +-65535 before each multiply by a Q15 gain so every
  * product fits in 31 bits. No division or 64-bit arithmetic per sample (one division per block for the polyBLEP).
@@ -77,8 +91,23 @@ static const int32_t T_FHZ[5]   = { 900, 1100, 1300, 1650, 2100 };       /* form
 static const int32_t T_NOISE[5] = { 1100, 900, 750, 750, 900 };          /* bow noise */
 static const int32_t T_LEVEL[5] = { 19285, 21408, 26288, 24156, 19762 }; /* loudness compensation */
 
+/* ---------------------------------------------------------------- DRONE: the knob's map */
+static const int32_t T_DLEVEL[5] = { 0, 9000, 16000, 21000, 24500 };    /* drone level against the string */
+static const int32_t T_DHZ[5]    = { 260, 420, 780, 1350, 2200 };       /* low-pass cutoff: dark .. dense */
+static const int32_t T_DQ[5]     = { 30000, 24000, 17000, 19000, 22000 };   /* damping: resonant in the middle */
+static const int32_t T_DFIFTH[5] = { 16384, 18000, 20300, 22300, 23600 };   /* the fifth against the root */
+static const int32_t T_DSUB[5]   = { 0, 0, 0, 6000, 14000 };              /* sub-octave sine */
+/* fixed drone keys: phase increments of C2 .. B2 (2^32 = one cycle per sample at 44.1 kHz) */
+static const uint32_t KEY_INC[12] = { 6370030u, 6748811u, 7150117u, 7575285u, 8025735u, 8502970u,
+                                      9008582u, 9544261u, 10111792u, 10713070u, 11350103u, 12025015u };
+#define DRONE_FADE 2341                  /* drone gain step per block: 0 .. 1 in 14 blocks (~40 ms) */
+#define ROOT_DET   38                    /* +2 cents, Q15 fraction of the increment */
+#define FIFTH_DET  (-57)                 /* -3 cents */
+/* page-2 word 5 (blue pushed): 13 zones, 0 = FOLLOW, 1 .. 12 = C .. B */
+static inline int drone_key(const int16_t *k) { return (int)((knob(k, 5) * 13) >> 15); }
+
 /* ramped gains: each moves linearly across the block from the previous block's value */
-enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, NG };
+enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, NG };
 
 typedef struct {
     uint32_t ph;                 /* melody string phase (2^32 = one cycle) */
@@ -89,10 +118,34 @@ typedef struct {
     int32_t dc8;                 /* DC blocker (one-pole ~14 Hz), Q8 */
     int32_t ks[4];               /* knobs, smoothed per block */
     int32_t g[NG];               /* gains reached at the end of the previous block */
+    /* drone (only the owner, and a voice fading its drone out, run it) */
+    uint32_t dph[3];             /* root, fifth, sub-octave phases */
+    uint32_t dinc[3];            /* their increments in the last block rendered (to rewind a copied state) */
+    int32_t dlp, dbp;            /* drone low-pass (SVF) */
+    int32_t dgain;               /* ownership fade, Q15 */
     uint8_t held, fresh;
 } voice_t;
 
 static voice_t V[NV];
+static int32_t buf[BLK];         /* the voice being built (render is never re-entered: one audio interrupt) */
+
+/* shared: block counting (voices render in ascending order, so an index not above the last one starts a new block),
+ * each voice's last pitch and the drone owner */
+static uint32_t blk;
+static int last_vi = NV;
+static uint32_t v_blk[NV], v_inc[NV];
+static int owner = -1;
+
+static void take_drone(int to)
+{
+    const int from = owner;
+    owner = to;
+    if (from < 0 || from == to) return;
+    voice_t *a = &V[from], *b = &V[to];
+    const int ahead = v_blk[from] == blk;                  /* the old owner has rendered this block already */
+    for (int j = 0; j < 3; j++) b->dph[j] = a->dph[j] - (ahead ? a->dinc[j] * BLK : 0u);
+    b->dlp = a->dlp; b->dbp = a->dbp;
+}
 
 static void hs_note_on(void *self, const int16_t *k)
 {
@@ -106,6 +159,12 @@ static void hs_note_on(void *self, const int16_t *k)
     v->tone = v->flp = v->fbp = 0;
     v->dc8 = 0;
     for (int i = 0; i < 4; i++) v->ks[i] = knob(k, i);
+    v_inc[vi] = 0;                          /* its pitch is unknown until it renders */
+    if (owner < 0) {                        /* the first note ever: a fresh drone */
+        v->dph[0] = 0; v->dph[1] = 0x55555555u; v->dph[2] = 0;
+        v->dlp = v->dbp = 0;
+    }
+    /* the owner keeps its drone state when it is re-triggered (a stolen or repeated note): no restart */
     v->held = 1;
     v->fresh = 1;
 }
@@ -124,9 +183,22 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     voice_t *v = &V[vi];
     const int32_t *inc = OP1_PITCH_INC;
 
+    /* shared, once per block: the block count; then this voice's pitch and the drone's owner */
+    if (vi <= last_vi) blk++;
+    last_vi = vi;
+    v_inc[vi] = (uint32_t)inc[0];
+    {
+        int best = -1;
+        uint32_t lo = 0xFFFFFFFFu;
+        for (int i = 0; i < NV; i++)
+            if (V[i].held && v_inc[i] && v_inc[i] < lo) { lo = v_inc[i]; best = i; }
+        if (best < 0 && owner < 0) best = vi;
+        if (best == vi && owner != vi) take_drone(vi);     /* the new owner takes over when it renders */
+    }
+
     /* knobs: ~6 ms smoothing (two blocks); a fresh note starts at the current position */
     for (int i = 0; i < 4; i++) v->ks[i] += (knob(k, i) - v->ks[i]) >> 1;
-    const int32_t s = v->ks[1];
+    const int32_t d = v->ks[0], s = v->ks[1];
 
     /* pitch: drift wanders to a new random target every ~0.15 s on average (~0.2 s glide) */
     if ((lcg(&v->rng) >> 24) < 5) v->drift_t = ((int32_t)(lcg(&v->rng) >> 24) - 128) * 3 >> 2;   /* +-96 */
@@ -146,12 +218,21 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
 
     /* block targets */
     int32_t t[NG];
-    t[G_FLUTE] = tab5(T_FLUTE, s);
-    t[G_REED]  = tab5(T_REED, s);
-    t[G_SAW]   = tab5(T_SAW, s);
-    t[G_NOISE] = (tab5(T_NOISE, s) * bow) >> 15;
+    /* the string's loudness compensation is folded into its source gains (the filters are linear), so it does not
+     * move the drone */
+    const int32_t lvl = tab5(T_LEVEL, s);
+    t[G_FLUTE] = (tab5(T_FLUTE, s) * lvl) >> 15;
+    t[G_REED]  = (tab5(T_REED, s) * lvl) >> 15;
+    t[G_SAW]   = (tab5(T_SAW, s) * lvl) >> 15;
+    t[G_NOISE] = (((tab5(T_NOISE, s) * bow) >> 15) * lvl) >> 15;
     t[G_NASAL] = tab5(T_NASAL, s);
-    t[G_OUT]   = (((tab5(T_LEVEL, s) * 9000) >> 15) * (12000 + ((vel * 20767) >> 15))) >> 15;   /* level x velocity */
+#ifdef HS_TEST_SOLO_DRONE                    /* host tests only: the string muted, to measure the drone alone */
+    t[G_FLUTE] = t[G_REED] = t[G_SAW] = t[G_NOISE] = t[G_NASAL] = 0;
+#endif
+    t[G_OUT]   = (9000 * (12000 + ((vel * 20767) >> 15))) >> 15;         /* level x velocity */
+    /* drone: ownership fade, then its level */
+    v->dgain = clampi(v->dgain + (vi == owner ? DRONE_FADE : -DRONE_FADE), 0, 32767);
+    t[G_DRONE] = (tab5(T_DLEVEL, d) * v->dgain) >> 15;
     const uint32_t pw = (uint32_t)tab5(T_PW, s) << 17;
     const int32_t f0x = (dt * 1378) >> 10;                                 /* the pitch in Hz (dt * 44100 / 32768) */
     const int32_t ta = onepole_coef((((tab5(T_LPK, s) * f0x) >> 0) * bow) >> 15);
@@ -165,20 +246,21 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     const int flute = g0[G_FLUTE] | t[G_FLUTE];
 
     uint32_t ph = v->ph, rng = v->rng;
-    int32_t tone = v->tone, flp = v->flp, fbp = v->fbp, dc8 = v->dc8;
-    int16_t *o = out;
+    int32_t tone = v->tone, flp = v->flp, fbp = v->fbp;
+    int32_t *o = buf;
+    const int32_t *ip = inc;                                               /* inc itself stays at sample 0 */
     /* 8 sub-blocks of 16 samples; the gains step from the old block value to the new one (the first sub-block at
      * 1/8 of the way), as EVA does: smooth enough with knobs smoothed per block, and far cheaper than per sample */
     for (int sb = 1; sb <= 8; sb++) {
 #define GAIN(i) (g0[i] + ((dg[i] * sb) >> 3))
         const int32_t gf = GAIN(G_FLUTE), gr = GAIN(G_REED), gs = GAIN(G_SAW), gn = GAIN(G_NOISE);
-        const int32_t gb = GAIN(G_NASAL), go = GAIN(G_OUT);
+        const int32_t gb = GAIN(G_NASAL);
 #undef GAIN
         /* saw * gs + pulse * gr with pulse = (saw - saw2) / 2: two products instead of three */
         const int32_t ga = gs + (gr >> 1), gp = gr >> 1;
         const int32_t gbq = (fq * gb) >> 14;                               /* formant: unity at the centre, x2 */
-        for (int n = 0; n < 16; n++, inc++) {
-            ph += (uint32_t)*inc + doff;
+        for (int n = 0; n < 16; n++, ip++) {
+            ph += (uint32_t)*ip + doff;
             const int32_t saw = blep_saw(ph, dt, inv8);
             const int32_t saw2 = blep_saw(ph - pw, dt, inv8);              /* the pulse's second edge */
             int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;               /* +-16384 */
@@ -196,16 +278,66 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
             flp += (ff * fbp) >> 15;
             const int32_t hp = (raw >> 1) - flp - ((fq * fbp) >> 15);
             fbp += (ff * hp) >> 15;
-            int32_t y = tone + ((fbp * gbq) >> 15);
-
-            dc8 += (y * 256 - dc8) >> 9;                                   /* DC blocker */
-            y -= dc8 >> 8;
-            *o++ = op1_sat16((clampi(y, -65535, 65535) * go) >> 15);
+            *o++ = tone + ((fbp * gbq) >> 15);
         }
     }
     v->ph = ph; v->rng = rng;
-    v->tone = tone; v->flp = flp; v->fbp = fbp; v->dc8 = dc8;
+    v->tone = tone; v->flp = flp; v->fbp = fbp;
+
+    /* ---- drone: the owner, and a former owner while it fades out */
+    if (g0[G_DRONE] | t[G_DRONE]) {
+        const int key = drone_key(k);
+        uint32_t ri[BLK];                                                  /* root increment per sample */
+        if (key) for (int n = 0; n < BLK; n++) ri[n] = KEY_INC[key - 1];
+        else for (int n = 0; n < BLK; n++) ri[n] = (uint32_t)inc[n] >> 1;
+        const uint32_t r0 = ri[0], f0 = r0 + (r0 >> 1), s0 = r0 >> 1;
+        const uint32_t roff = (uint32_t)((int32_t)(r0 >> 15) * ROOT_DET), foff = (uint32_t)((int32_t)(f0 >> 15) * FIFTH_DET);
+        const int32_t rdt = clampi((int32_t)((r0 + roff) >> 17), 1, 16384), fdt = clampi((int32_t)((f0 + foff) >> 17), 1, 16384);
+        const int32_t rinv = (int32_t)((1u << 30) / (uint32_t)rdt) >> 8, finv = (int32_t)((1u << 30) / (uint32_t)fdt) >> 8;
+        const int32_t fifth = tab5(T_DFIFTH, d), sub = tab5(T_DSUB, d);
+        const int32_t fd = svf_coef(tab5(T_DHZ, d)), qd = tab5(T_DQ, d);
+        uint32_t p0 = v->dph[0], p1 = v->dph[1], p2 = v->dph[2];
+        int32_t dlp = v->dlp, dbp = v->dbp;
+        int32_t *b = buf;
+        for (int sb = 1; sb <= 8; sb++) {
+            const int32_t gd = g0[G_DRONE] + ((dg[G_DRONE] * sb) >> 3);
+            for (int n = 0; n < 16; n++, b++) {
+                const uint32_t r = ri[(sb - 1) * 16 + n];
+                p0 += r + roff;
+                p1 += r + (r >> 1) + foff;
+                p2 += r >> 1;
+                const int32_t x = (blep_saw(p0, rdt, rinv) >> 1) + ((blep_saw(p1, fdt, finv) * fifth) >> 16);
+                /* resonant two-pole low-pass: Chamberlin SVF on half the signal, low-pass output x2 */
+                dlp += (fd * dbp) >> 15;
+                const int32_t hp = (x >> 1) - dlp - ((qd * dbp) >> 15);
+                dbp += (fd * hp) >> 15;
+                const int32_t y = dlp * 2 + ((sine(p2) * sub) >> 15);
+                *b += (clampi(y, -65535, 65535) * gd) >> 15;
+            }
+        }
+        v->dph[0] = p0; v->dph[1] = p1; v->dph[2] = p2;
+        v->dinc[0] = r0 + roff; v->dinc[1] = f0 + foff; v->dinc[2] = s0;
+        v->dlp = dlp; v->dbp = dbp;
+    } else {
+        /* not running: its phases did not move this block, so a copy from it needs no rewind */
+        v->dinc[0] = v->dinc[1] = v->dinc[2] = 0;
+    }
+
+    /* ---- output: DC blocker, level x velocity */
+    int32_t dc8 = v->dc8;
+    for (int sb = 1; sb <= 8; sb++) {
+        const int32_t go = g0[G_OUT] + ((dg[G_OUT] * sb) >> 3);
+        for (int n = 0; n < 16; n++) {
+            const int i = (sb - 1) * 16 + n;
+            int32_t y = buf[i];
+            dc8 += (y * 256 - dc8) >> 9;
+            y -= dc8 >> 8;
+            out[i] = op1_sat16((clampi(y, -65535, 65535) * go) >> 15);
+        }
+    }
+    v->dc8 = dc8;
+    v_blk[vi] = blk;
 }
 
 const op1_engine_t ENGINE_hollow_saint = { hs_note_on, hs_render, hs_note_off,
-                                           { OP1_PRESS_NONE, OP1_PRESS_NONE, OP1_PRESS_NONE, OP1_PRESS_NONE } };
+                                           { OP1_PRESS_PAGE, OP1_PRESS_NONE, OP1_PRESS_NONE, OP1_PRESS_NONE } };
