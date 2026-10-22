@@ -179,7 +179,7 @@ static inline int32_t stroke_env(uint32_t sp)
 
 /* ---------------------------------------------------------------- CATHEDRAL: the knob's map */
 static const int32_t T_CWET[5]  = { 0, 8192, 14746, 18022, 20316 };      /* wet: 0, .25, .45, .55, .62 */
-static const int32_t T_CDRY[5]  = { 32767, 30147, 26214, 22938, 19661 }; /* dry: 1, .92, .8, .7, .6 */
+static const int32_t T_CDRY[5]  = { 32767, 31130, 28180, 25559, 22938 }; /* dry: 1, .95, .86, .78, .7 */
 static const int32_t T_CBFB[5]  = { 0, 14746, 22938, 21299, 18022 };     /* body comb feedback .45 .7 .65 .55 */
 static const int32_t T_CBODY[5] = { 0, 26214, 32767, 19661, 13107 };     /* body in the wet */
 static const int32_t T_CRFB[5]  = { 9830, 14746, 20316, 24576, 26870 };  /* room feedback .3 .45 .62 .75 .82 */
@@ -387,7 +387,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
 #ifdef HS_TEST_SOLO                          /* host tests only: 1 = the drone alone, 2 = the buzz alone */
     t[G_FLUTE] = t[G_REED] = t[G_SAW] = t[G_NOISE] = t[G_NASAL] = 0;
 #endif
-    t[G_OUT]   = (9000 * (12000 + ((vel * 20767) >> 15))) >> 15;         /* level x velocity */
+    t[G_OUT]   = (7800 * (12000 + ((vel * 20767) >> 15))) >> 15;         /* level x velocity */
     v->dgain = clampi(v->dgain + (vi == owner ? DRONE_FADE : -DRONE_FADE), 0, 32767);
     const int32_t own = (v->dgain * bowg) >> 15;
     t[G_DRONE] = (tab5(T_DLEVEL, d) * own) >> 15;
