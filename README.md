@@ -3,9 +3,11 @@
 A haunted hurdy-gurdy for the **original Teenage Engineering OP-1**: a kennel synth plugin (`hollow_saint`) for the
 [Hundekraft OP-1 Workshop](https://hundekraft.github.io/op1-workshop/index.html) 3.0.x. Bowed melody strings, a drone that
 can hold a key like real bourdons, a buzzing bridge that kicks in on tempo-locked wheel strokes, and a cathedral that
-darkens, rings and tolls a distant bell. Pure synthesis, no samples. Version **0.6.1**.
+darkens, rings and tolls a distant bell. Two performance transformations: **Lo-Fi Relic** (press green: an old tape
+in a forgotten room) and **Crank & Tremor** (the wheel's strokes pulse the level and the string's tone). Pure synthesis,
+no samples. Version **0.7.0**.
 
-**Install file: `release/hollow_saint.knl`** (33,556 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
+**Install file: `release/hollow_saint.knl`** (40,548 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
 folder `release/presets/`.
 
 ## Status: what has and has not been done
@@ -18,7 +20,7 @@ folder `release/presets/`.
 | Blackfin toolchain (`bfin-elf-gcc` 13.3.0, binutils 2.42) built from source (`toolchain/build_toolchain.sh`) | done; **reproduces Hundekraft's official build**: 11 of the Workshop's own plugins rebuilt from the 3.0.3 source are byte-for-byte identical to the files it publishes |
 | **`.knl` package** built with the SDK's packer (`tools/kennel/pack.py`): SVG, relocation and import checks | **done**: one import, `_op1_eng_page`, exported by the 3.0.3 core |
 | **Loader**: the core's own loader code (`kn_load.c`) and the reference loader accept it and relocate it to identical images at two addresses; structure matches a known-good plugin (`erdtree.knl`) | **passes** |
-| **The compiled Blackfin code, run** in the Blackfin instruction-set simulator at the firmware's fixed addresses: audio bit-identical to the host-tested build (138,240 samples) | **passes** |
+| **The compiled Blackfin code, run** in the Blackfin instruction-set simulator at the firmware's fixed addresses: audio bit-identical to the host-tested build (184,320 samples, Lo-Fi Relic included) | **passes** |
 | Loaded in the Workshop / OP1-Emulator | not done |
 | **Tested on OP-1 hardware** | **not done** |
 
@@ -94,8 +96,8 @@ the plugin in the Workshop.
 | Knob | Turn | Push (page 2) |
 |---|---|---|
 | **Blue: DRONE** | off at 0, then subtle and dark, rich and resonant (middle), dense with a sub-octave (high) | the drone's **key**: FOLLOW (the lowest held note) or a fixed key C … B |
-| **Green: STRINGS** | soft, hollow, almost flute-like; nasal hurdy-gurdy (middle); bright and cutting | none |
-| **White: WHEEL BUZZ** | smooth; rhythmic buzzing on the wheel strokes (middle); continuous gritty rattle with accents (high) | the **stroke rate**: steady, 1/4, 1/8 (default), 1/8 triplet, 1/16 of the OP-1 tempo |
+| **Green: STRINGS** | soft, hollow, almost flute-like; nasal hurdy-gurdy (middle); bright and cutting | **Lo-Fi Relic** on while page 2 is open; turning green then sets the relic's **age** (STRINGS stays where it was). Push again: off |
+| **White: WHEEL BUZZ** | smooth; breathing swells (low), steady mechanical tremolo and buzz on the strokes (middle); aggressive rattle and deep pulse (high) | the **stroke rate**: steady, 1 bar, 1/2, 1/4, 1/8 (default), 1/8 triplet, 1/16 of the OP-1 tempo |
 | **Red: CATHEDRAL** | dry and close; hollow, resonant, old-world (middle); dark, expansive, with a distant bell on each note (high) | none |
 
 How the sound is made, briefly:
@@ -111,6 +113,17 @@ How the sound is made, briefly:
 - **Cathedral:** body combs (hollow), diffusers into a damped room, a darkening filter, and a faint church-bell strike
   (hum, minor-third tierce, nominal, upper partial) fed only into the room. When you release a key the bow lifts (faster
   at higher CATHEDRAL) and the space rings on through the T2 release.
+- **Crank & Tremor (0.7.0):** the same wheel strokes also move the voice's level and the string's nasal formant. Low on
+  WHEEL BUZZ the stroke is a smooth raised cosine (slow, breathing swells, best at 1 bar or 1/2); from the middle it takes
+  the wheel's mechanical stroke shape (a steady tremolo); high, a deep pulse under the aggressive buzz. The tone pulse is
+  restrained (at most ±27 % of the formant). Steady (no strokes) leaves the sound still; WHEEL BUZZ at 0 turns it off.
+- **Lo-Fi Relic (0.7.0):** press green. The voice goes through a worn tape before the cathedral, so the room hears the
+  relic: wow (two slow, uneven sines) and flutter on the pitch of the string, drone and trompette; a warm cubic
+  saturation; a lower sample rate (22 kHz down to 7.5 kHz) and fewer bits (12 down to 8, dithered, so fading notes turn to
+  grain rather than gating); dust pops; a two-pole tape-head low-pass (5.6 down to 2.4 kHz); a little hiss; and a
+  transport that sags now and then. The age (green turned while the relic is on) moves all of it together; small
+  signals stay at about their dry level, so it is darker and older, not quieter. Switching cross-fades in ~35 ms and
+  the pitch wobble fades in and out with it: no click.
 
 Tips: use a **long T2 release** to hear the cathedral ring out, and a **full sustain** so the drone stays even when its
 owner changes. For a free-standing drone note, set DRONE to 0, hold a low note and play the melody above it.
@@ -122,7 +135,9 @@ and surge on the wheel strokes; the drone strings (blue), melody strings (green)
 their levels; the buzzing bridge rattles; each held note lights its key; the rose window's eight petals fill with
 CATHEDRAL; the saint's halo widens and flares and the bell swings at each bell strike. Four meters show the knobs.
 Page 2 of blue shows a one-octave keyboard with the drone's key (or the FOLLOW arrow); page 2 of white shows the beat
-cut into the chosen stroke rate.
+cut into the chosen stroke rate (a slur over the bar for 1 bar and 1/2). While the Lo-Fi Relic is on, the green meter
+becomes a worn cassette whose reels turn with the tape's wobble, with the relic's age beside it, and dust specks drift
+in the cathedral.
 
 ## Test results (this version)
 
@@ -138,16 +153,24 @@ CPU on the Blackfin instruction set: simulator cycles per 128-sample voice block
 
 | Engine | Defaults-like (all 50 %) | Worst knob setting |
 |---|---|---|
-| hollow_saint 0.6.1 | 19,705 | **21,715** (all at maximum) |
+| hollow_saint 0.7.0 | 20,254 | 22,209 (all at maximum); **28,602** with the Lo-Fi Relic at its oldest |
+| hollow_saint 0.6.1 | 19,705 | 21,715 |
 | hollow_saint 0.6.0 | 29,675 | 34,969 |
 | EVA (ships) | 18,877 | 20,286 |
 | Wavetable (ships) | 27,437 | 27,437 |
 | Taffy (ships) | 39,467 | 39,467 |
 
-Six voices at Hollow Saint's worst setting come to about 45 M cycles a second, roughly 11 % of the OP-1's 400 MHz
-core by the simulator's model, which does not model every stall (0.6.0: 72 M, 18 %). That is 1.07 × EVA at the worst
-setting and 1.04 × EVA at the defaults, and below Wavetable and Taffy, which ship. On the instrument, check peak load
-in the resource monitor (clock screen, T1) with six voices, a heavy effect and the knobs at maximum.
+Six voices at Hollow Saint's worst setting come to about 46 M cycles a second, roughly 11.5 % of the OP-1's 400 MHz
+core by the simulator's model, which does not model every stall; with the Lo-Fi Relic on at its oldest, 59 M, about
+15 % (0.6.0 without any of it: 72 M, 18 %). That is 1.09 × EVA at the worst setting (1.41 × with the relic), below
+Wavetable and Taffy, which ship. On the instrument, check peak load in the resource monitor (clock screen, T1) with six
+voices, a heavy effect, the knobs at maximum and the relic on.
+
+With the Lo-Fi Relic off and the wheel steady (or WHEEL BUZZ at 0), 0.7.0's audio is still bit-identical to 0.6.1
+and 0.6.0: the host suite's 14 original renders compare equal byte for byte. The new scenarios check the relic (darker:
+HF share x0.6; level within ±1 dB of dry), 8 relic switches under a chord with no click, the age swept both ways, a
+20 s hold at maximum everything with the oldest relic (no runaway), the tremor at three WHEEL BUZZ settings and all 7
+rates (the pulse deepens with the knob; steady stays still), and both together under a full cathedral.
 
 0.6.1 is a speed-up only: its audio is bit-identical to 0.6.0 (the host suite's 14 renders and the simulator's
 138,240 samples compare equal byte for byte), so presets and recordings sound exactly as before. Where the cycles
@@ -159,11 +182,23 @@ behind a 5-cycle jump per test), per-block divisions memoised, and a branch-free
 measured no faster and bigger.
 
 Loudness at defaults sits about 1 dB under EVA, with more chord headroom (6-voice chord peak 25,199 vs EVA 29,281).
-Memory: 13,804 bytes of static state (six voices' delay lines and filters), 14 KB of code, the 14 KB SVG; the
-`.knl` is 33.6 KB, far under the Workshop's 512 KiB limit. No allocation at run time. Stack: `render` 588 bytes plus
+Memory: 14,088 bytes of static state (six voices' delay lines and filters), 16.5 KB of code, the 16.9 KB SVG; the
+`.knl` is 40.5 KB, far under the Workshop's 512 KiB limit. No allocation at run time. Stack: `render` 672 bytes plus
 at most 60 in the loop it calls (EVA's render 740, MBIRA's 800).
 
 ## Known limitations
+
+- **Lo-Fi Relic and the green knob.** Synth engines get one kind of knob press from the kennel core: "page 2". So while
+  the relic is on, turning green sets its age, not STRINGS; push green again to turn the relic off and STRINGS back
+  to the knob. The relic's on/off is not saved with the patch (the age is: word 6). Red has no press of its own (its
+  page word is white's).
+- **The relic is per voice**, like everything here: each voice is degraded on its own (the hiss and dust follow the
+  notes and their envelopes), and the tape's wow and flutter are shared, so a chord wobbles as one tape.
+- **Crank & Tremor needs the wheel moving**: a stroke rate other than steady, and the OP-1's beat clock (or, when it
+  stands still, the free-running wheel at the same tempo). 1 bar and 1/2 count beats from the clock, so they pulse
+  every 4 or 2 beats but not necessarily on the bar's first beat.
+- **Preset stroke rates moved** in 0.7.0 (7 zones instead of 5): the 8 presets were rewritten for it; a patch saved
+  with 0.6 keeps its word but may land on a neighbouring rate.
 
 - **Not yet run on an OP-1 or loaded through the Workshop.** The package, the loader checks and the compiled code are
   verified on the PC and in the Blackfin simulator; the install, the real screen and the real CPU load are not.
@@ -179,6 +214,14 @@ at most 60 in the loop it calls (EVA's render 740, MBIRA's 800).
   the 3.0.3 core.
 - **Presets** stay within the factory ranges Hundekraft measured, but their envelope and FX settings have not been
   auditioned on an OP-1. The tour's host renders approximate the ADSR and leave out the OP-1's FX.
+
+## 0.7.0 demos
+
+`results/relic_demo.mp3`: one phrase dry, then with the Lo-Fi Relic at 25 % and 82 % age, then with a full cathedral.
+`results/crank_demo.mp3`: a held chord with WHEEL BUZZ at 25 % (1 bar, 1/2: breathing), 37 % (1/4), 55 % (1/8,
+mechanical) and 90 % (1/16, aggressive), at 100 BPM. `results/screen_relic.png`: the screen with the relic on and the
+1-bar rate. All made on a PC by the plugin's own C code (tests/perform.c), not recorded on an OP-1; the 0.6 preset
+previews in `results/preset_previews/` predate the 0.7.0 rate changes.
 
 ## Tour video
 

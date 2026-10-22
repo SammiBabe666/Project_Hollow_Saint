@@ -30,10 +30,11 @@ RANGE_LFO = {
 }
 SELECTOR = 0x5300                 # OP1_ENGINE_MAGIC: no fixed number (see above)
 
-# page-2 words: blue (word 5) = the drone's key in 13 zones, FOLLOW then C .. B; white (word 7) = the stroke rate in 5
-# zones, steady / 1/4 / 1/8 / 1/8T / 1/16. Each value is the middle of its zone.
+# page-2 words: blue (word 5) = the drone's key in 13 zones, FOLLOW then C .. B; green (word 6) = the Lo-Fi Relic's age
+# (the relic itself is switched by the green press, which is not saved); white (word 7) = the stroke rate in 7 zones,
+# steady / 1 bar / 1/2 / 1/4 / 1/8 / 1/8T / 1/16 (0.7.0; 0.6 had 5). Each zone value is the middle of its zone.
 KEYS = ['follow', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-RATES = ['steady', '1/4', '1/8', '1/8T', '1/16']
+RATES = ['steady', '1 bar', '1/2', '1/4', '1/8', '1/8T', '1/16']
 
 
 def key_word(k):
@@ -41,18 +42,19 @@ def key_word(k):
 
 
 def rate_word(r):
-    return int((RATES.index(r) + 0.5) * 32768 / 5)
+    return int((RATES.index(r) + 0.5) * 32768 / len(RATES))
 
 
 def pct(p):
     return round(p * 32767 / 100)
 
 
-# name: (DRONE, STRINGS, WHEEL BUZZ, CATHEDRAL) in %, drone key, stroke rate, ADSR, FX, LFO, octave
+# name: (DRONE, STRINGS, WHEEL BUZZ, CATHEDRAL) in %, drone key, stroke rate, ADSR, FX, LFO, octave; then the relic's
+# age in % (RELIC_AGE below). 0.7.0: midnight vigil breathes once a bar, crypt drone and drowned bell every half bar
 PRESETS = [
     ("hollow saint",   (50, 50, 45, 40), 'follow', '1/8',  [1400, 9000, 32767, 5200],
      ("spring", [7000, 12000, 2500, 7000]), None, 0),
-    ("midnight vigil", (70, 25, 10, 85), 'D',      'steady', [3600, 9000, 32767, 11000],
+    ("midnight vigil", (70, 25, 10, 85), 'D',      '1 bar', [3600, 9000, 32767, 11000],
      ("delay", [9000, 12000, 5000, 9000]), None, 0),
     ("howling dog",    (55, 72, 86, 22), 'follow', '1/16', [700, 9000, 32767, 3000],
      None, None, 0),
@@ -60,13 +62,15 @@ PRESETS = [
      ("spring", [8000, 11000, 2000, 6000]), None, 0),
     ("bone flute",     (28, 6, 0, 62),   'follow', '1/8',  [2400, 9000, 30000, 8000],
      ("delay", [8000, 10000, 4000, 7000]), ("tremolo", [9000, 0, 0, 6000]), 1),
-    ("crypt drone",    (100, 38, 30, 72), 'C',     'steady', [4200, 9000, 32767, 12000],
+    ("crypt drone",    (100, 38, 30, 72), 'C',     '1/2', [4200, 9000, 32767, 12000],
      None, None, -1),
     ("plague dance",   (45, 86, 66, 14), 'follow', '1/8T', [500, 9000, 32767, 2400],
      ("spring", [6000, 10500, 1500, 5000]), None, 0),
-    ("drowned bell",   (40, 35, 18, 100), 'A',     '1/8',  [2000, 9000, 32767, 14000],
+    ("drowned bell",   (40, 35, 18, 100), 'A',     '1/2',  [2000, 9000, 32767, 14000],
      ("delay", [10500, 16000, 6000, 12000]), None, 0),
 ]
+RELIC_AGE = {"hollow saint": 25, "midnight vigil": 60, "howling dog": 45, "ash procession": 50, "bone flute": 35,
+             "crypt drone": 70, "plague dance": 85, "drowned bell": 95}
 
 
 def ieee_extended(x):
@@ -96,7 +100,7 @@ def check(name, what, values, ranges):
 
 def knob_words(p):
     name, k, key, rate = p[0], p[1], p[2], p[3]
-    return [pct(x) for x in k], [key_word(key), 0, rate_word(rate)]
+    return [pct(x) for x in k], [key_word(key), max(1, pct(RELIC_AGE[name])), rate_word(rate)]
 
 
 def meta(p):

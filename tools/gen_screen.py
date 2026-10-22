@@ -241,15 +241,55 @@ end()
 group('kdot')                                        # placed by the C code (translate)
 circle(0, 0, 1.6, W, 1.2)
 end()
-# white page 2: the stroke rate as a beat cut in parts (steady, 1/4, 1/8, 1/8T, 1/16)
+# green page 2 (the Lo-Fi Relic is on while it is open): a worn cassette whose reels turn with the tape's wobble, and
+# the relic's age as a short meter beside it
+CX0, CY0 = MX[1], 141
+geom['CAS_X'], geom['CAS_Y'] = CX0, CY0
+group('relic')
+path(f'M{CX0},{CY0} L{CX0 + 26},{CY0} L{CX0 + 26},{CY0 + 15} L{CX0},{CY0 + 15} Z', G, 1)
+path(f'M{CX0 + 5},{CY0 + 15} L{CX0 + 7},{CY0 + 11} L{CX0 + 19},{CY0 + 11} L{CX0 + 21},{CY0 + 15}', G, 1)   # tape guide
+line(CX0 + 9, CY0 + 6, CX0 + 17, CY0 + 6, G, 0.8)                                                      # the window
+path(f'M{CX0 + 26},{CY0 + 3} L{CX0 + 23},{CY0 + 5} L{CX0 + 24.5},{CY0 + 7} L{CX0 + 22},{CY0 + 9}', GR, 0.8)   # a crack
+end()
+geom['REEL_X'] = [CX0 + 6, CX0 + 20]
+geom['REEL_Y'] = CY0 + 6
+for i, x in enumerate(geom['REEL_X']):                # the reels: hubs with three teeth, turned by the C code
+    group(f'rl{i}')
+    circle(x, CY0 + 6, 3, G, 1)
+    for k in range(3):
+        a = 2 * math.pi * k / 3
+        line(x + 1 * math.cos(a), CY0 + 6 + 1 * math.sin(a), x + 2.4 * math.cos(a), CY0 + 6 + 2.4 * math.sin(a), G, 0.8)
+    end()
+AGX, AGL = CX0 + 30, 14
+geom['AGE_X'], geom['AGE_LEN'] = AGX, AGL
+group('rage0')                                        # the age meter's track
+line(AGX, MY, AGX + AGL, MY, DK, 1.6)
+end()
+group('rage')                                         # the age, scaled from AGE_X
+line(AGX, MY, AGX + AGL, MY, G, 1.6)
+end()
+# dust in the cathedral while the relic plays: specks the C code shows and jitters
+group('dust')
+for x, y in ((30, 52), (74, 40), (118, 24), (196, 26), (238, 38), (286, 50), (52, 116), (150, 118), (226, 124),
+             (300, 112)):
+    dot(x, y, GR, 0.5, 0.9)
+end()
+
+# white page 2: the stroke rate as a beat cut in parts (steady, 1 bar, 1/2, 1/4, 1/8, 1/8T, 1/16); the slow rates
+# as one stroke under a slur over the bar (1 bar) or half of it (1/2)
 RX0, RL, RY0 = 176, 44, 146
 line_ids = []
-for zone, n in enumerate((0, 1, 2, 3, 4)):
+for zone, n in enumerate((0, -4, -2, 1, 2, 3, 4)):
     group(f'r{zone}')
     line(RX0, RY0 + 8, RX0 + RL, RY0 + 8, W, 1)
     if n == 0:
         line(RX0, RY0 + 3, RX0 + RL, RY0 + 3, W, 1.6)
-    for j in range(n):
+    if n < 0:
+        span = (RL - 4) * (-n) / 4
+        line(RX0 + 2, RY0, RX0 + 2, RY0 + 6, W, 1.6)
+        path(f'M{RX0 + 2},{RY0 - 1} C{f(RX0 + 2 + span / 3)},{RY0 - 5} {f(RX0 + 2 + 2 * span / 3)},{RY0 - 5} '
+             f'{f(RX0 + 2 + span)},{RY0 - 1}', W, 0.8)
+    for j in range(max(n, 0)):
         x = RX0 + 2 + j * (RL - 4) / n
         line(x, RY0, x, RY0 + 6, W, 1.6)
     if n == 3:

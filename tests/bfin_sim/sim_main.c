@@ -52,17 +52,21 @@ int main(void)
     int16_t *sine = (int16_t *)OP1_SINE_TABLE;
     for (int i = 0; i < 8192; i++) sine[i] = SIM_SINE[i];
     beat_reset();
-    static const int16_t settings[3][4] = { { 16384, 16384, 16384, 16384 }, { 32767, 32767, 32767, 32767 }, { 0, 0, 0, 0 } };
+    /* mid, max, zero; then max with the Lo-Fi Relic on at its oldest and the wheel at 1/16 (the heaviest case) */
+    static const int16_t settings[4][4] = { { 16384, 16384, 16384, 16384 }, { 32767, 32767, 32767, 32767 }, { 0, 0, 0, 0 },
+                                            { 32767, 32767, 32767, 32767 } };
     static const int notes[6] = { 36, 43, 48, 55, 60, 67 };
     int32_t *pitch = (int32_t *)OP1_PITCH_INC;
     int16_t *env = (int16_t *)OP1_VOICE_ENV;
     int16_t *vel = (int16_t *)OP1_VOICE_VEL;
     static int16_t out[OP1_BLOCK];
 #ifdef SIM_CYCLES
-    uint32_t total[3];
+    uint32_t total[4];
 #endif
-    for (int s = 0; s < 3; s++) {
+    for (int s = 0; s < 4; s++) {
         int16_t k[8] = { settings[s][0], settings[s][1], settings[s][2], settings[s][3], 0x5300 + 32, 0, 0, 16384 };
+        op1_eng_page[1] = s == 3;
+        if (s == 3) { k[6] = 32767; k[7] = 32767; }
         for (int v = 0; v < 6; v++) {
             *(uint32_t *)OP1_VOICE(v) = 0xC0DEF00Du;                /* the firmware's word */
             vel[v] = (int16_t)(100 << 8);
@@ -85,8 +89,8 @@ int main(void)
         for (int v = 0; v < 6; v++) if (ENGINE.note_off) ENGINE.note_off(OP1_VOICE(v));
     }
 #ifdef SIM_CYCLES
-    static const char *const name[3] = { "mid", "max", "zero" };
-    for (int s = 0; s < 3; s++) {
+    static const char *const name[4] = { "mid", "max", "zero", "max+relic" };
+    for (int s = 0; s < 4; s++) {
         out_text(name[s]); out_text(" "); out_num(total[s] / (BLOCKS * 6)); out_text(" cycles per voice-block\n");
     }
 #endif

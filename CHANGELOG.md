@@ -2,6 +2,20 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## 0.7.0 (Lo-Fi Relic, Crank & Tremor)
+- **Lo-Fi Relic** on the green press (page 2; green then sets its age, word 6): wow and flutter on every pitch (shared
+  tape), cubic saturation, sample-rate and bit reduction with dither, dust, a two-pole tape-head low-pass, hiss and a
+  sagging transport, before the cathedral. ~35 ms cross-fade on switching; unity gain for small signals.
+- **Crank & Tremor**: the wheel strokes also pulse the level and the nasal tone, smooth (breathing) low on WHEEL BUZZ,
+  mechanical from the middle, deep at the top. Stroke rates: steady, 1 bar, 1/2, 1/4, 1/8, 1/8T, 1/16 (adds the two slow
+  ones; beats counted from the clock).
+- Screen: a worn cassette with turning reels and an age meter while the relic is on, dust in the cathedral; 7 rate icons.
+- Presets rewritten for 7 rates (midnight vigil breathes once a bar, crypt drone and drowned bell every half bar) and
+  each given a relic age. Manifest page-2 defaults: age 25 %, rate 1/8.
+- Relic off and wheel steady: audio bit-identical to 0.6.1. Cycles: worst 22,209 (relic off), 28,602 (relic on, oldest).
+- Tests: 6 new suite scenarios (relic tone and level, 8 switches without a click, age sweep, 20 s at maximum, tremor
+  over knob and rates, both together); the simulator workload adds a relic-on setting.
+
 ## 0.6.1 (speed-up, same sound)
 - Blackfin cycles per voice block (simulator): worst setting 34,969 -> 21,715 (-38 %), defaults-like 29,675 -> 19,705,
   all knobs at zero 19,626 -> 13,556. Six voices at the worst setting: ~11 % of the core (was ~18 %); 1.07 x EVA.

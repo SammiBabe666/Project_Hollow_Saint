@@ -19,5 +19,11 @@ static const int16_t HS_METER_X[4] = { 24, 100, 176, 252 };
 #define HS_KBD_X 34
 #define HS_KBD_W 5
 #define HS_KBD_Y 142
+#define HS_CAS_X 100
+#define HS_CAS_Y 141
+static const int16_t HS_REEL_X[2] = { 106, 120 };
+#define HS_REEL_Y 147
+#define HS_AGE_X 130
+#define HS_AGE_LEN 14
 #define HS_RX0 176
 #endif

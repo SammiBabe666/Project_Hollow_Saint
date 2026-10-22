@@ -54,6 +54,8 @@ static void *vobj(int i) { return OP1_VOICE(i); }
 static uint32_t *vtab(int i) { return (uint32_t *)vobj(i); }
 
 static int fails;
+static char extra[160];                                    /* a scenario's own result line */
+static long toggles[64]; static int ntog;                  /* sample positions where the relic was switched */
 static void fail(const char *what, const char *scen) { printf("  FAIL %s: %s\n", scen, what); fails++; }
 
 static void note_on(int note, int vel)
@@ -163,8 +165,10 @@ static double rms_range(long a, long b)
  * scenario's timing tells which is which. */
 #define CF 512
 static int cmp_d(const void *a, const void *b) { double x = *(const double *)a, y = *(const double *)b; return (x > y) - (x < y); }
+static long click_at[4096]; static int nclick_at;
 static int count_clicks(long *first)
 {
+    nclick_at = 0;
     static double fe[MAXS / CF + 1];
     long nf = nrec / CF; int c = 0; *first = -1;
     for (long f = 0; f < nf; f++) {
@@ -181,7 +185,11 @@ static int count_clicks(long *first)
         if (m < 8) continue;
         qsort(w, (size_t)m, sizeof w[0], cmp_d);
         double med = w[m / 2];
-        if (fe[f] > 8 * med && fe[f] > 300.0 * 300.0) { if (c == 0) *first = f * CF; c++; }
+        if (fe[f] > 8 * med && fe[f] > 300.0 * 300.0) {
+            if (c == 0) *first = f * CF;
+            c++;
+            if (nclick_at < 4096) click_at[nclick_at++] = f * CF;
+        }
     }
     return c;
 }
@@ -189,6 +197,7 @@ static void reset_all(void)
 {
     for (int i = 0; i < NV; i++) { fv[i] = (fw_voice){ 0 }; *vtab(i) = VTABLE_MAGIC; }
     nrec = 0; bend_cents = 0;
+    op1_eng_page[1] = 0; knobs[5] = knobs[6] = knobs[7] = 0; ntog = 0; extra[0] = 0;
     op1_beat_t *b = host_beat(); b->len = 0;
 }
 
@@ -269,6 +278,92 @@ static void sc_long(void)         /* 20 s hold at maximum everything: runaway / 
     note_on(36, 127); note_on(43, 127); note_on(48, 127); hold(20.0); all_off(); hold(1.0);
 }
 
+/* ---- 0.7.0: Lo-Fi Relic (green page 2 = op1_eng_page[1], its age in word 6) and Crank & Tremor (the wheel) ---- */
+static void relic(int on) { op1_eng_page[1] = (uint8_t)on; toggles[ntog++] = nrec; }
+/* the bus's HF share: second-difference energy over signal energy (lower = darker) */
+static double hf_share(long a, long b)
+{
+    double e = 0, d = 0;
+    if (b > nrec) b = nrec;
+    for (long i = a + 2; i < b; i++) { double x = rec[i], y = x - 2.0 * rec[i - 1] + rec[i - 2]; e += x * x; d += y * y; }
+    return d / (e + 1e-9);
+}
+static void sc_relic(void)         /* a chord dry, with the relic (default age), dry again: darker, about as loud */
+{
+    int c[] = { 43, 50, 55, 62 };
+    for (int i = 0; i < 4; i++) note_on(c[i], 110);
+    hold(2.5); relic(1); hold(1.5); relic(0); hold(1.5);
+    const long d1 = (long)(44100 * 1.0), r = (long)(44100 * 3.0), d2 = (long)(44100 * 4.5), n = 44100;
+    const double hd = 0.5 * (hf_share(d1, d1 + n) + hf_share(d2, d2 + n)), hr = hf_share(r, r + n);
+    const double rd = 0.5 * (rms_range(d1, d1 + n) + rms_range(d2, d2 + n)), rr = rms_range(r, r + n);
+    all_off(); hold(1.0);
+    snprintf(extra, sizeof extra, "relic vs dry: HF share x%.2f, level x%.2f", hr / hd, rr / rd);
+    if (!(hr < 0.8 * hd)) fail("the relic is not darker", "relic");
+    if (rr < 0.7 * rd || rr > 1.41 * rd) fail("the relic changes the level by 3 dB or more", "relic");
+}
+static void sc_relic_toggle(void)  /* switching on and off while a chord sounds, 8 times: no click at a switch */
+{
+    knobs[3] = 26000;                                      /* with the cathedral, which hears the relic */
+    int c[] = { 38, 45, 50, 57, 62 };
+    for (int i = 0; i < 5; i++) note_on(c[i], 120);
+    hold(0.6);
+    for (int i = 0; i < 8; i++) { relic(!(i & 1)); hold(0.45); }
+    all_off(); hold(1.0);
+}
+static void sc_relic_age(void)     /* the age swept 0 .. 100 % with the relic on, then back */
+{
+    note_on(48, 127); note_on(55, 127); relic(1); hold(0.5);
+    const int nb = blocks_of(5.0);
+    for (int b = 0; b < nb; b++) { knobs[6] = (int16_t)(1 + 32766L * b / (nb - 1)); run_blocks(1); }
+    for (int b = 0; b < nb; b++) { knobs[6] = (int16_t)(32767 - 32766L * b / (nb - 1)); run_blocks(1); }
+    all_off(); hold(0.6); relic(0);
+}
+static void sc_relic_long(void)    /* 20 s at maximum everything, the oldest relic: runaway / drift */
+{
+    for (int k = 0; k < 4; k++) knobs[k] = 32767;
+    knobs[6] = 32767; knobs[7] = 26000; relic(1);
+    note_on(36, 127); note_on(43, 127); note_on(48, 127); hold(20.0); all_off(); hold(1.0); relic(0);
+}
+/* the level's modulation: RMS in 1/32-beat windows (689 samples at 120 BPM) over a held note, max / min */
+static double pulse_depth(long a, long b)
+{
+    double lo = 1e18, hi = 0;
+    for (long i = a; i + 689 <= b; i += 689) { double r = rms_range(i, i + 689); if (r < lo) lo = r; if (r > hi) hi = r; }
+    return hi / (lo + 1e-9);
+}
+static void sc_tremor(void)        /* white at 25 / 50 / 90 %, each stroke rate: the pulse grows with the knob */
+{
+    static const int16_t wv[3] = { 8192, 16384, 29491 };
+    char *p = extra; p += sprintf(p, "pulse max/min at 1/4 (steady):");
+    double prev = 0;
+    for (int w = 0; w < 3; w++) {
+        knobs[2] = wv[w];
+        double steady = 0;
+        for (int z = 0; z < 7; z++) {
+            knobs[7] = (int16_t)(z * 32767 / 7 + 2340);   /* the middle of zone z */
+            note_on(50, 110); hold(1.5);
+            const double pd = pulse_depth(nrec - (long)(44100 * 1.2), nrec);
+            if (getenv("TREMDBG")) fprintf(stderr, "w%d z%d pd %.2f\n", w, z, pd);
+            if (z == 0) steady = pd;
+            if (z == 3) {                                  /* 1/4: one stroke per beat */
+                p += sprintf(p, " %d%%:%.2f (%.2f)", wv[w] * 100 / 32768, pd, steady);
+                if (w && pd < 0.95 * prev) fail("the tremor does not deepen with WHEEL BUZZ", "tremor");
+                prev = pd;
+            }
+            if (z >= 3 && w == 2 && pd < 1.3 * steady) fail("no audible pulse at high WHEEL BUZZ", "tremor");
+            all_off(); hold(0.25);
+        }
+    }
+}
+static void sc_crank_relic(void)   /* both: tremor at 1/8 under the relic and a full cathedral */
+{
+    knobs[2] = 20000; knobs[3] = 30000; knobs[7] = (int16_t)(4 * 32767 / 7 + 2340); relic(1);
+    static const int mel[] = { 62, 64, 65, 67, 69, 67, 65, 64, 62, 0 };
+    note_on(38, 110); hold(0.3);
+    for (int i = 0; mel[i]; i++) { note_on(mel[i], 110); hold(0.35); note_off(mel[i]); hold(0.05); }
+    note_off(38); hold(1.5); relic(0);
+}
+
 static const int16_t DEF[4] = { 16384, 16384, 12000, 12000 };
 /* per-scenario: bus peak limit (int32 before the bus saturates), sustained-section check */
 static scen_t scen[] = {
@@ -286,6 +381,12 @@ static scen_t scen[] = {
     { "long",    sc_long,    40000, 1, 2.0, 20.0 },
     { "handover", sc_handover, 32767, 0, 0, 0 },
     { "tail",    sc_tail,    32767, 0, 0, 0 },
+    { "relic",   sc_relic,   32767, 0, 0, 0 },
+    { "rtoggle", sc_relic_toggle, 40000, 0, 0, 0 },
+    { "relicage", sc_relic_age, 32767, 0, 0, 0 },
+    { "reliclong", sc_relic_long, 40000, 1, 2.0, 20.0 },
+    { "tremor",  sc_tremor,  32767, 0, 0, 0 },
+    { "crankrelic", sc_crank_relic, 32767, 0, 0, 0 },
 };
 
 int main(int argc, char **argv)
@@ -310,7 +411,7 @@ int main(int argc, char **argv)
         for (long i = 0; i < nrec; i++) { int32_t a = abs(rec[i]); if (a > peak) peak = a; sum += rec[i]; }
         double rms = rms_range(0, nrec), dc = sum / (double)(nrec ? nrec : 1);
         long first; int clicks = count_clicks(&first);
-        char note[160] = "";
+        char note[400] = "";
         if (scen[s].sustain_check) {
             long a = (long)(scen[s].hold_from * 44100), b = (long)(scen[s].hold_to * 44100);
             double r0 = rms_range(a, a + 22050), r1 = rms_range(b - 22050, b);
@@ -319,6 +420,13 @@ int main(int argc, char **argv)
             if (r1 < 0.25 * r0) fail("sustain collapsed during the hold", scen[s].name);
         }
         if (clicks) snprintf(note + strlen(note), sizeof note - strlen(note), "%sfirst click %.3f s", *note ? ", " : "", first / 44100.0);
+        if (*extra) snprintf(note + strlen(note), sizeof note - strlen(note), "%s%s", *note ? ", " : "", extra);
+        for (int t = 0; t < ntog; t++)                    /* a switch of the relic must not click */
+            for (int c = 0; c < nclick_at; c++)
+                if (click_at[c] > toggles[t] - 2 * CF && click_at[c] < toggles[t] + 3 * CF) {
+                    char w[64]; snprintf(w, sizeof w, "click at a relic switch (%.3f s)", toggles[t] / 44100.0);
+                    fail(w, scen[s].name);
+                }
         printf("%-8s %8d %7.1f %8.0f %7.1f %7d %s\n", scen[s].name, peak, 20 * log10(peak / 32768.0 + 1e-12), rms, dc, clicks, note);
         if (peak > scen[s].peak_limit) fail("bus peak over the limit", scen[s].name);
         if (fabs(dc) > 150) fail("DC offset", scen[s].name);

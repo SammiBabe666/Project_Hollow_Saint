@@ -193,9 +193,16 @@ static const int32_t T_SWELL[5]   = { 0, 2500, 4500, 4000, 3000 };       /* the 
 #define BUZZ_THRESH 9830                 /* wheel pressure (Q15) where the dog starts to lift: 0.3 */
 #define TROMP_MIN   11686994u            /* 120 Hz (between A#2 and B2, not on a note, so rounding never decides):
                                           * the trompette is folded up to at least this (44.1 kHz increment) */
-/* page-2 word 7 (white pushed): 5 zones, steady / 1/4 / 1/8 / 1/8T / 1/16; strokes per beat */
-static const uint8_t STROKES[5] = { 0, 1, 2, 3, 4 };
-static inline int stroke_zone(const int16_t *k) { return (int)((knob(k, 7) * 5) >> 15); }
+/* page-2 word 7 (white pushed): 7 zones, steady / 1 bar / 1/2 / 1/4 / 1/8 / 1/8T / 1/16; strokes per beat x4 */
+#define NZONES 7
+static const uint8_t STROKES4[NZONES] = { 0, 1, 2, 4, 8, 12, 16 };
+static inline int stroke_zone(const int16_t *k) { return (int)((knob(k, 7) * NZONES) >> 15); }
+/* Crank & Tremor: the wheel's strokes also move the voice's level and the string's nasal tone. Low on the knob a
+ * smooth, breathing swell (a raised cosine of the stroke phase); from the middle the mechanical stroke shape; high, a
+ * deep pulse under the aggressive buzz. Steady (no strokes) leaves both still */
+static const int32_t T_TREM[5]   = { 0, 8000, 12000, 14000, 16000 };     /* level dip between strokes (Q15) */
+static const int32_t T_TSHARP[5] = { 0, 0, 20000, 32767, 32767 };       /* smooth .. mechanical stroke shape */
+static const int32_t T_TTONE[5]  = { 0, 4000, 7000, 8500, 9000 };       /* nasal formant pulse, +-27 % at most */
 
 /* stroke envelope from the stroke phase (Q32): a 7 % rise, then a squared fall over the rest */
 static inline int32_t stroke_env(uint32_t sp)
@@ -229,11 +236,29 @@ static const uint32_t BELL_RATIO[4] = { 2048, 4874, 8192, 10895 };
 static const uint8_t  BELL_DECAY[4] = { 15, 14, 13, 12 };
 static const int32_t  BELL_W[4]     = { 22938, 16384, 19661, 11469 };
 
+/* ---------------------------------------------------------------- LO-FI RELIC (green pushed): the knob's map over its
+ * page-2 word 6, the relic's age (unset: 8192, where the firmware starts a fresh word). An old tape in a forgotten room:
+ * wow and flutter, warm saturation, a lower sample rate and fewer bits, a dark tape head, hiss, dust and a
+ * transport that sags now and then */
+static const int32_t T_RWOW[5]   = { 40, 70, 110, 160, 230 };            /* wow depth, Q15 of the pitch (2 .. 12 cents) */
+static const int32_t T_RFLUT[5]  = { 10, 18, 28, 40, 55 };               /* flutter depth (0.5 .. 3 cents) */
+static const int32_t T_RDRIVE[5] = { 4915, 6144, 7373, 9011, 11059 };    /* into the saturator, Q12: 1.2 .. 2.7 */
+static const int32_t T_RMAKE[5]  = { 20024, 16661, 14951, 13981, 13528 }; /* 1 / (1.5 x drive), x1.1 .. 1.67 for the squash */
+static const int32_t T_RHZ[5]    = { 5600, 4600, 3700, 3000, 2400 };     /* the tape head's low-pass (two poles), Hz */
+static const int32_t T_RRATE[5]  = { 22050, 16000, 12000, 9500, 7500 };  /* sample rate, Hz */
+static const int32_t T_RBITS[5]  = { 4, 5, 6, 7, 8 };                    /* bits dropped below int16: 12 .. 8 left */
+static const int32_t T_RHISS[5]  = { 40, 70, 110, 160, 220 };            /* hiss gain on +-16384 noise */
+static const int32_t T_RPOPS[5]  = { 2, 3, 5, 8, 12 };                   /* dust: pops per second per voice */
+static const int32_t T_RPOP[5]   = { 1500, 2500, 3500, 4500, 6000 };     /* their size */
+static const int32_t T_RSAG[5]   = { 600, 1000, 1600, 2400, 3300 };      /* transport sag: level dip (Q15) */
+#define RELIC_FADE 2731                  /* on / off cross-fade step per block: 12 blocks, ~35 ms */
+static inline int32_t relic_age(const int16_t *k) { return k[6] > 0 ? k[6] : 8192; }
+
 /* ramped gains: each steps across the block from the previous block's value */
 enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, G_BUZZ, G_WET, G_DRY, G_BODY, G_ROOM, NG };
 #define GAIN(i, sb) (g0[i] + ((dg[i] * (sb)) >> 3))   /* sub-block sb = 1 .. 8 */
 
-enum { M_INV, M_RINV, M_FINV, M_TONE, M_DAMP, M_DARK };
+enum { M_INV, M_RINV, M_FINV, M_TONE, M_DAMP, M_DARK, M_RELIC };
 typedef struct {
     uint32_t ph;                 /* melody string phase (2^32 = one cycle) */
     uint32_t rng;                /* per-voice noise */
@@ -265,7 +290,11 @@ typedef struct {
     uint32_t bph[4];             /* bell partial phases (11.025 kHz) */
     int32_t benv[4];             /* their envelopes, Q23 */
     int32_t up[3];               /* the interpolator's last three 22.05 kHz samples */
-    int32_t memo[6][2];          /* memo_blep_inv / memo_lp_coef, indexed by M_* */
+    int32_t memo[7][2];          /* memo_blep_inv / memo_lp_coef, indexed by M_* */
+    /* Lo-Fi Relic */
+    int32_t rmix;                /* its cross-fade, Q15 (0: off, and the stage is skipped) */
+    int32_t relp, relp2, rhold, rpop;   /* tape-head low-pass (two poles), the held sample, the current pop */
+    uint32_t rph, rrng;          /* sample-rate phase, its own noise */
     uint8_t cat_on, bell_pending;
     uint8_t held, fresh;
 } voice_t;
@@ -285,7 +314,12 @@ static uint32_t v_blk[NV], v_inc[NV];
 static int owner = -1;
 /* shared wheel: the stroke phase when the beat clock is not moving (advanced once per block) */
 static uint32_t wheel_free;
-static uint8_t wheel_new_block;
+static uint8_t wheel_new_block, relic_new_block;
+static uint32_t beat_n, beat_last;       /* beats counted from the clock's phase wrapping (for 1 bar and 1/2) */
+/* the relic's tape transport, shared by every voice (one tape): wow, flutter and sag, advanced once per block */
+static uint32_t relic_wow, relic_wow2, relic_flut, relic_rng = 0x6C8E9CF5u;
+static int32_t relic_sag, relic_sag_t;
+static volatile int32_t hs_relic_wob;    /* for the screen: the transport's wobble (display only) */
 /* for the screen (written by the audio interrupt, read by the GUI thread; display only) */
 static volatile uint32_t hs_blocks;      /* voice renders: changes while anything sounds */
 static volatile int32_t hs_stroke;       /* the wheel's stroke envelope (Q15) */
@@ -294,7 +328,7 @@ static volatile uint32_t hs_bell_n;      /* bell strikes */
 static volatile int32_t hs_bell_lvl;     /* the last strike's size (Q15) */
 
 /* ---------------------------------------------------------------- the string's loop (section 1 of render) */
-typedef struct { uint32_t pw, doff; int32_t ta, ff, grit, dt, inv8; } string_t;
+typedef struct { uint32_t pw, doff; int32_t ta, ff, grit, dt, inv8; const int32_t *tmod; } string_t;
 static int32_t hb[HB];           /* the voice at 22.05 kHz (scratch for the voice being rendered) */
 
 /* inlined at four call sites with constant flute / rough, so neither is tested per sample */
@@ -315,7 +349,8 @@ static inline __attribute__((always_inline)) void string_run(voice_t *v, const s
         const int32_t gf = GAIN(G_FLUTE, sb), gr = GAIN(G_REED, sb), gs = GAIN(G_SAW, sb), gn = GAIN(G_NOISE, sb);
         /* saw * gs + pulse * gr with pulse = (saw - saw2) / 2: two products instead of three */
         const int32_t ga = gs + (gr >> 1), gp = gr >> 1;
-        const int32_t gbq = (fq * GAIN(G_NASAL, sb)) >> 14;                /* formant: unity at the centre, x2 */
+        /* formant: unity at the centre, x2; tmod: the tremor's tone pulse (32768 = none, so no change without it) */
+        const int32_t gbq = (((fq * GAIN(G_NASAL, sb)) >> 14) * st->tmod[sb - 1]) >> 15;
         for (int n = 0; n < 8; n++, ip += 2) {
             const uint32_t pold = ph;
             ph += (uint32_t)ip[0] + (uint32_t)ip[1] + doff;
@@ -436,6 +471,54 @@ static __attribute__((noinline)) void buzz_run(voice_t *v, const uint32_t *ri, c
     v->slap = slap; v->rattle = rattle; v->rlp = rlp; v->rbp = rbp; v->tlp = tlp; v->amp = amp;
 }
 
+/* ---------------------------------------------------------------- the Lo-Fi Relic stage, on hb (+-65535) at 22.05 kHz:
+ * saturation, a lower sample rate, fewer bits with dither, dust, the tape head's low-pass, hiss, the transport's sag;
+ * cross-faded with the dry voice from rm0 to rm1 across the block (so switching never clicks), unity for small signals */
+static __attribute__((noinline)) void relic_run(voice_t *v, const int32_t age, const int32_t rm0, const int32_t rm1)
+{
+    if (!rm0) { v->relp = v->relp2 = v->rhold = v->rpop = 0; v->rph = 0; v->rrng ^= 0x2545F491u; }   /* switched on: no stale state */
+    const int32_t drive = tab5(T_RDRIVE, age);                             /* <= 11059 */
+    const int32_t make = (tab5(T_RMAKE, age) * (32767 - ((tab5(T_RSAG, age) * relic_sag) >> 15))) >> 15;
+    const int32_t a = memo_lp_coef(tab5(T_RHZ, age), v->memo[M_RELIC]);
+    const uint32_t rinc = (uint32_t)tab5(T_RRATE, age) * 194783u;         /* Hz -> Q32 per sample (2^32 / 22050) */
+    const int sh = (int)tab5(T_RBITS, age);
+    const int32_t mask = -(1 << sh), half = 1 << (sh - 1);
+    const int32_t hiss = tab5(T_RHISS, age), popsz = tab5(T_RPOP, age);
+    const uint32_t pthr = (uint32_t)tab5(T_RPOPS, age) * 194783u;          /* pops per second -> chance per sample */
+    int32_t lp = v->relp, lp2 = v->relp2, hold = v->rhold, pop = v->rpop;
+    uint32_t rph = v->rph, rng = v->rrng;
+    const int32_t dm = rm1 - rm0;
+    int32_t *h = hb;
+    for (int sb = 1; sb <= 8; sb++) {
+        const int32_t mix = rm0 + ((dm * sb) >> 3);
+        for (int n = 0; n < 8; n++, h++) {
+            const int32_t x = *h;
+            /* warm saturation: a cubic, (3 s - s^3) / 2, on the driven signal limited to full scale. x >> 1 and the
+             * drive fit int16, s and s^2 are within +-32767 */
+            const int32_t s = clampi(m16(x >> 1, drive) >> 12, -32767, 32767);
+            const int32_t s2 = m16(s, s) >> 15;
+            const int32_t y = (3 * s - (m16(s2, s) >> 15)) >> 1;
+            /* the lower sample rate: hold y until the phase wraps */
+            const uint32_t old = rph;
+            rph += rinc;
+            if (rph < old) hold = y;
+            /* fewer bits, dithered (so a fading note turns to grain, not to a gate), and the dust */
+            const uint32_t r = lcg(&rng);
+            if (UNLIKELY(r < pthr)) pop = (r & 0x100) ? popsz : -popsz;
+            const int32_t q = clampi(((hold + (int32_t)(r >> (32 - sh)) - half) & mask) + pop, -32768, 32767);
+            pop -= pop >> 1;
+            /* the tape head: two dark one-pole low-passes (inputs and states within int16, so their differences
+             * >> 1 are too) */
+            lp = clampi(lp + (m16((q - lp) >> 1, a) >> 14), -32768, 32767);
+            lp2 = clampi(lp2 + (m16((lp - lp2) >> 1, a) >> 14), -32768, 32767);
+            const int32_t nz = (int32_t)(r >> 17) - 16384;
+            const int32_t wet = (m16(clampi(lp2 + (m16(nz, hiss) >> 15), -32768, 32767), make) >> 14);
+            *h = x + ((((wet - x) >> 1) * mix) >> 14);
+        }
+    }
+    v->relp = lp; v->relp2 = lp2; v->rhold = hold; v->rpop = pop; v->rph = rph; v->rrng = rng;
+}
+
 static void take_drone(int to)
 {
     const int from = owner;
@@ -490,7 +573,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     const int32_t *inc = OP1_PITCH_INC;
 
     /* shared, once per block: the block count; then this voice's pitch and the drone's owner */
-    if (vi <= last_vi) { blk++; wheel_new_block = 1; }
+    if (vi <= last_vi) { blk++; wheel_new_block = 1; relic_new_block = 1; }
     last_vi = vi;
     v_inc[vi] = (uint32_t)inc[0];
     {
@@ -509,14 +592,15 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     /* the wheel: stroke phase at the block start and its step per 22.05 kHz sample, from the beat clock */
     uint32_t sp = 0, sinc = 0;
     const int zone = stroke_zone(k);
-    if (STROKES[zone]) {
+    const uint32_t s4 = STROKES4[zone];                                    /* strokes per beat x4 */
+    if (s4) {
         op1_beat_t bc;
         op1_beat_clock(&bc);
         const int32_t len_s = bc.len > 0 ? clampi(bc.len >> 14, 4410, 176400) : 22050;  /* samples per beat */
         static int32_t len_memo;                                           /* shared: the same clock for all voices */
         static uint32_t per_sample;
         if (len_memo != len_s) { len_memo = len_s; per_sample = 0xFFFFFFFFu / (uint32_t)len_s; }
-        sinc = per_sample * STROKES[zone];
+        sinc = s4 & 3 ? (per_sample >> 2) * s4 : per_sample * (s4 >> 2);
         if (bc.len > 0 && bc.step > 0) {
             const int32_t next_s = clampi(bc.next >> 14, 0, len_s);
             static int32_t next_memo = -1, nlen_memo;
@@ -525,7 +609,12 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 next_memo = next_s; nlen_memo = len_s;
                 bp15 = 32768u - (((uint32_t)next_s << 15) / (uint32_t)len_s);
             }
-            sp = (bp15 * STROKES[zone]) << 17;
+            if (wheel_new_block) {                                         /* count beats: the phase wrapped */
+                if (bp15 < beat_last) beat_n++;
+                beat_last = bp15;
+            }
+            /* the stroke phase over a 4-beat span (for 1 bar and 1/2; whole strokes per beat drop the beat count) */
+            sp = ((((beat_n & 3u) << 15) + bp15) * s4) << 15;
             if (bc.step != 0x100000) sinc = (sinc >> 10) * (uint32_t)(clampi(bc.step, 0, 0x400000) >> 10);
             wheel_free = sp;                                               /* the free phase continues from here */
         } else {
@@ -537,11 +626,47 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     wheel_new_block = 0;
     int32_t senv[8];                                                       /* stroke envelope per sub-block */
     for (int sb = 0; sb < 8; sb++) senv[sb] = sinc ? stroke_env(sp + sinc * (uint32_t)(sb * 8 + 4)) : 32767;
+    /* Crank & Tremor per sub-block: tlev = the level (Q15, 32768 = untouched), tmod = the nasal tone (32768 = none) */
+    int32_t tlev[8], tmod[8];
+    const int32_t trem = tab5(T_TREM, bz), ttone = tab5(T_TTONE, bz);
+    if (sinc && (trem | ttone)) {
+        const int32_t sharp = tab5(T_TSHARP, bz);
+        for (int sb = 0; sb < 8; sb++) {
+            const int32_t smooth = (32768 + sine(sp + sinc * (uint32_t)(sb * 8 + 4) + 0x40000000u)) >> 1;   /* cos */
+            const int32_t te = smooth + (((senv[sb] - smooth) * sharp) >> 15);   /* 0 .. 32767, 32767 on a stroke */
+            tlev[sb] = 32768 - ((trem * (32767 - te)) >> 15);
+            tmod[sb] = 32768 + ((ttone * (te - 16384)) >> 14);
+        }
+    } else {
+        for (int sb = 0; sb < 8; sb++) tlev[sb] = tmod[sb] = 32768;
+    }
+
+    /* Lo-Fi Relic: on while green's page 2 is (op1_eng_page[1]); the tape transport moves once per block */
+    const int relic_on = op1_eng_page[1] != 0;
+    const int32_t age = relic_age(k);
+    if (relic_new_block) {
+        relic_new_block = 0;
+        relic_wow += 6838u << 10;                                          /* 0.55 Hz at 344.5 blocks a second */
+        relic_wow2 += 2858u << 10;                                         /* 0.23 Hz */
+        relic_flut += 80816u << 10;                                        /* 6.5 Hz */
+        if ((lcg(&relic_rng) >> 24) < 2) relic_sag_t = (int32_t)(lcg(&relic_rng) >> 17);   /* a new sag every ~0.4 s */
+        relic_sag += (relic_sag_t - relic_sag) >> 5;
+    }
+    int32_t wob = 0;                                                       /* this voice's pitch wobble, Q15 */
+    const int32_t rm0 = v->rmix;
+    v->rmix = clampi(rm0 + (relic_on ? RELIC_FADE : -RELIC_FADE), 0, 32767);
+    const int32_t rm1 = v->rmix;
+    if (rm1) {
+        const int32_t w = (sine(relic_wow) * 3 + sine(relic_wow2)) >> 2;  /* two slow sines: irregular */
+        const int32_t fl = sine(relic_flut) + ((int32_t)(lcg(&relic_rng) >> 18) - 8192);   /* flutter, a little rough */
+        wob = (((tab5(T_RWOW, age) * w) >> 15) + ((tab5(T_RFLUT, age) * fl) >> 15)) * v->rmix >> 15;
+        hs_relic_wob = wob;
+    }
 
     /* pitch: drift wanders to a new random target every ~0.15 s on average (~0.2 s glide) */
     if ((lcg(&v->rng) >> 24) < 5) v->drift_t = ((int32_t)(lcg(&v->rng) >> 24) - 128) * 3 >> 2;   /* +-96 */
     v->drift += (v->drift_t - v->drift) >> 6;
-    const int32_t drift = v->drift;
+    const int32_t drift = v->drift + wob;
     /* the drift as a constant phase offset per sample for this block (the pitch's own per-sample changes, LFO or
      * bend, still come through inc[n]; the drift is a few cents of the block's first increment) */
     const uint32_t doff = (uint32_t)((int32_t)((uint32_t)inc[0] >> 15) * drift) << 1;   /* per 22.05 kHz sample */
@@ -597,7 +722,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         st.ta = memo_lp_coef((tab5(T_LPK, s) * f0x * (bow >> 5)) >> 10, v->memo[M_TONE]);
         st.ff = svf_coef(tab5(T_FHZ, s));
         st.grit = tab5(T_GRIT, bz);
-        st.dt = dt; st.inv8 = inv8; st.doff = doff;
+        st.dt = dt; st.inv8 = inv8; st.doff = doff; st.tmod = tmod;
         const int flute = (g0[G_FLUTE] | t[G_FLUTE]) != 0;                 /* the sine pair only while it is heard */
         const int rough = st.grit || v->mjit != 32767;                     /* grit on, or its last cycle to finish */
         if (flute) { if (rough) string_fr(v, &st, inc, g0, dg); else string_f(v, &st, inc, g0, dg); }
@@ -613,6 +738,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
          * increment over two 44.1 kHz samples */
         if (key) for (int m = 0; m < HB; m++) ri[m] = KEY_INC[key - 1] << 1;
         else for (int m = 0; m < HB; m++) ri[m] = ((uint32_t)inc[2 * m] + (uint32_t)inc[2 * m + 1]) >> 1;
+        if (wob) for (int m = 0; m < HB; m++) ri[m] += (uint32_t)((int32_t)(ri[m] >> 15) * wob);   /* the relic's tape */
     }
     if (run_drone) {
         drone_run(v, ri, g0, dg, d);
@@ -626,6 +752,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         v->tinc = 0;
     }
     for (int m = 0; m < HB; m++) hb[m] = clampi(hb[m], -65535, 65535);    /* the voice, bounded once */
+    if (rm0 | rm1) relic_run(v, age, rm0, rm1);                            /* before the cathedral: the room hears it */
 
     /* ======== 3. cathedral: body combs (22.05 kHz), diffusers, room and bell (11.025 kHz), mixed back into hb */
     if (v->bell_pending) {
@@ -767,6 +894,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         for (int sb = 1; sb <= 8; sb++) {
             int32_t go = GAIN(G_OUT, sb);
             go += (go * ((swell * senv[sb - 1]) >> 15)) >> 15;
+            go = (go * tlev[sb - 1]) >> 15;                                /* Crank & Tremor (32768: no change) */
             int32_t *h = hb + (sb - 1) * 8;
             if (kd) {
                 for (int n = 0; n < 8; n++) {
@@ -813,8 +941,10 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     }
 }
 
+/* presses: blue page 2 = the drone key, green page 2 = the Lo-Fi Relic (on while it is open; green then sets its age),
+ * white page 2 = the stroke rate. Red has none: its page word would be white's (word 7) */
 const op1_engine_t ENGINE_hollow_saint = { hs_note_on, hs_render, hs_note_off,
-                                           { OP1_PRESS_PAGE, OP1_PRESS_NONE, OP1_PRESS_PAGE, OP1_PRESS_NONE } };
+                                           { OP1_PRESS_PAGE, OP1_PRESS_PAGE, OP1_PRESS_PAGE, OP1_PRESS_NONE } };
 
 /* ======================= screen (GUI thread) =======================
  * hollow_saint.svg (tools/gen_screen.py; positions in hollow_saint_geom.h): a hurdy-gurdy seen from above in a gothic
@@ -829,10 +959,10 @@ const op1_engine_t ENGINE_hollow_saint = { hs_note_on, hs_render, hs_note_off,
  *   m0 .. m3       the four knob meters; blue page 2 shows kbd + kdot (the drone key, or the FOLLOW arrow), white
  *                  page 2 shows r0 .. r4 (the stroke rate: steady, 1/4, 1/8, 1/8T, 1/16) */
 #define ONE 1024
-static void *n_wheel, *n_crank, *n_dog, *n_bell, *n_halo, *n_kbd, *n_kdot;
-static void *n_m[4], *n_p[8], *n_s[5], *n_kp[6], *n_r[5];
+static void *n_wheel, *n_crank, *n_dog, *n_bell, *n_halo, *n_kbd, *n_kdot, *n_relic, *n_rage, *n_rage0, *n_dust;
+static void *n_m[4], *n_p[8], *n_s[5], *n_kp[6], *n_r[NZONES], *n_rl[2];
 static uint32_t sc_last_blocks, sc_bell_n, sc_seed = 0x2F6E2B1u;
-static int32_t sc_act, sc_wang, sc_wvel, sc_bang, sc_bvel, sc_glow;
+static int32_t sc_act, sc_wang, sc_wvel, sc_bang, sc_bvel, sc_glow, sc_reel;
 
 static inline uint32_t sc_rnd(void) { return (sc_seed = sc_seed * 1664525u + 1013904223u) >> 17; }   /* 0 .. 32767 */
 static void sc_move(void *n, int32_t tx, int32_t ty)                 /* Q10 */
@@ -877,7 +1007,7 @@ static void hs_screen_init(void *scr)
     static const char *const p[8] = { "p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7" };
     static const char *const st[5] = { "s0", "s1", "s2", "s3", "s4" };
     static const char *const kp[6] = { "kp0", "kp1", "kp2", "kp3", "kp4", "kp5" };
-    static const char *const r[5] = { "r0", "r1", "r2", "r3", "r4" };
+    static const char *const r[NZONES] = { "r0", "r1", "r2", "r3", "r4", "r5", "r6" };
     n_wheel = op1_find_node(scr, "wheel");
     n_crank = op1_find_node(scr, "crank");
     n_dog = op1_find_node(scr, "dog");
@@ -889,8 +1019,16 @@ static void hs_screen_init(void *scr)
     for (int i = 0; i < 8; i++) n_p[i] = op1_find_node(scr, p[i]);
     for (int i = 0; i < 5; i++) n_s[i] = op1_find_node(scr, st[i]);
     for (int i = 0; i < 6; i++) { n_kp[i] = op1_find_node(scr, kp[i]); sc_show(n_kp[i], 0); }
-    for (int i = 0; i < 5; i++) { n_r[i] = op1_find_node(scr, r[i]); sc_show(n_r[i], 0); }
+    for (int i = 0; i < NZONES; i++) { n_r[i] = op1_find_node(scr, r[i]); sc_show(n_r[i], 0); }
+    n_relic = op1_find_node(scr, "relic");
+    n_rage = op1_find_node(scr, "rage");
+    n_rage0 = op1_find_node(scr, "rage0");
+    n_dust = op1_find_node(scr, "dust");
+    n_rl[0] = op1_find_node(scr, "rl0");
+    n_rl[1] = op1_find_node(scr, "rl1");
     sc_show(n_kbd, 0); sc_show(n_kdot, 0);
+    sc_show(n_relic, 0); sc_show(n_rage, 0); sc_show(n_rage0, 0); sc_show(n_dust, 0);
+    sc_show(n_rl[0], 0); sc_show(n_rl[1], 0);
 }
 
 static void hs_screen_update(void *scr, int dt)
@@ -953,9 +1091,9 @@ static void hs_screen_update(void *scr, int dt)
     sc_scale(n_halo, hs, hs, HS_HALO_X, HS_HALO_Y);
 
     /* meters, and the page-2 icons in place of the blue and white meters */
-    const int pg0 = op1_eng_page[0] != 0, pg2 = op1_eng_page[2] != 0;
+    const int pg0 = op1_eng_page[0] != 0, pg1 = op1_eng_page[1] != 0, pg2 = op1_eng_page[2] != 0;
     for (int i = 0; i < 4; i++) {
-        const int hide = (i == 0 && pg0) || (i == 2 && pg2);
+        const int hide = (i == 0 && pg0) || (i == 1 && pg1) || (i == 2 && pg2);
         sc_show(n_m[i], !hide);
         if (!hide) sc_scale(n_m[i], (k[i] * ONE) >> 15, ONE, HS_METER_X[i], HS_METER_Y);
     }
@@ -973,7 +1111,20 @@ static void hs_screen_update(void *scr, int dt)
         }
     }
     const int zone = stroke_zone(words);
-    for (int i = 0; i < 5; i++) sc_show(n_r[i], pg2 && i == zone);
+    for (int i = 0; i < NZONES; i++) sc_show(n_r[i], pg2 && i == zone);
+
+    /* Lo-Fi Relic (green page 2): the worn cassette, its reels turning while notes sound (unevenly, with the tape's
+     * wobble), its age meter, and dust drifting in the cathedral */
+    sc_show(n_relic, pg1); sc_show(n_rage, pg1); sc_show(n_rage0, pg1); sc_show(n_dust, pg1);
+    sc_show(n_rl[0], pg1); sc_show(n_rl[1], pg1);
+    if (pg1) {
+        sc_reel += (sc_act * (1400 + hs_relic_wob * 8)) >> 15;          /* Q16 turn per frame */
+        sc_rotate(n_rl[0], sc_reel, HS_REEL_X[0], HS_REEL_Y);
+        sc_rotate(n_rl[1], sc_reel + 21845, HS_REEL_X[1], HS_REEL_Y);
+        sc_scale(n_rage, (relic_age(words) * ONE) >> 15, ONE, HS_AGE_X, HS_METER_Y);
+        if ((sc_rnd() & 7) == 0)                                       /* the dust shifts now and then */
+            sc_move(n_dust, ((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2), ((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2));
+    }
 
     op1_screen_draw(scr, dt);
 }
