@@ -1,11 +1,14 @@
 /* Cathedral of the Hollow Saint (plugin id hollow_saint): a hurdy-gurdy for the original OP-1, kennel synth plugin.
  *
- * Milestone 3: melody string + drone.
+ * Milestone 4: melody string + drone + wheel buzz.
  *   blue  (knob 0) DRONE: off (0) .. subtle and dark .. rich and resonant (middle) .. dense, with a sub-octave (high).
  *                  Push for page 2: the drone's tuning, FOLLOW (the lowest held note) or a fixed key C .. B (word 5).
  *   green (knob 1) STRINGS: soft hollow, almost flute-like (low) .. nasal hurdy-gurdy (middle) .. bright and cutting
  *                  (high).
- *   Not yet: white WHEEL BUZZ, orange CATHEDRAL (no effect yet).
+ *   white (knob 2) WHEEL BUZZ: smooth (0) .. rhythmic buzzing on the wheel strokes (middle) .. a continuous, gritty
+ *                  rattle with accents (high). Push for page 2: the stroke rate, steady / 1/4 / 1/8 / 1/8T / 1/16 of
+ *                  the OP-1's tempo (word 7).
+ *   Not yet: orange CATHEDRAL (no effect yet).
  *
  * The string: a bowed string's waveform is close to a sawtooth (Helmholtz motion); its nasal reedy colour comes from a
  * narrow pulse and the instrument body. Per sample: a polyBLEP saw, a polyBLEP pulse (two saws, one offset by the pulse
@@ -24,6 +27,16 @@
  * seamless (same pitch, same phase); in FOLLOW it glides to the new bass note's drone.
  *   FOLLOW: root an octave below the owner's note, fifth above that root (the note itself is the root's octave).
  *   Fixed key: root in octave 2 (C2 .. B2), fifth above; it ignores the played notes, octave and transpose.
+ *
+ * The wheel buzz (trompette and chien): on the instrument a buzzing bridge (the "dog") on the trompette string lifts and
+ * slaps the soundboard once per string cycle, but only while the wheel pushes the string hard enough; players push in
+ * rhythm with short wrist strokes (coups de poignet). Here: the trompette, an octave above the drone root (FOLLOW: the
+ * owner's own note), runs with the drone owner; once per trompette cycle a slap (its size jittered per cycle: the
+ * rattle) excites a bridge resonance (1.7 .. 3.2 kHz) with a little noise inside the slap only, so the buzz stays pitched
+ * and harmonic at any setting. Its size follows the wheel: a stroke envelope locked to the OP-1's beat clock (read once
+ * per block; when the clock stands still, e.g. tape stopped, a free-running phase at the same tempo takes over) plus a
+ * steady part, through a pressure threshold, so each stroke kicks the buzz in. The strokes also swell the string a
+ * little, and at high settings each melody-string cycle gets a random roughness (grit).
  *
  * Fixed point: Q15 throughout (32768 = 1.0); signals stay within +-65535 before each multiply by a Q15 gain so every
  * product fits in 31 bits. No division or 64-bit arithmetic per sample (one division per block for the polyBLEP).
@@ -81,7 +94,7 @@ static int32_t onepole_coef(int32_t hz)
 static inline int32_t svf_coef(int32_t hz) { return (clampi(hz, 20, 2500) * 4781) >> 10; }
 
 /* ---------------------------------------------------------------- STRINGS: the knob's map (5 points, 0..100 %) */
-static const int32_t T_FLUTE[5] = { 27853, 14746, 3277, 0, 0 };          /* hollow sine pair */
+static const int32_t T_FLUTE[5] = { 27853, 14746, 0, 0, 0 };          /* hollow sine pair */
 static const int32_t T_REED[5]  = { 3277, 14746, 19661, 16384, 14746 };  /* pulse */
 static const int32_t T_SAW[5]   = { 0, 3277, 9830, 16384, 21299 };       /* saw */
 static const int32_t T_PW[5]    = { 16384, 9830, 5243, 3932, 3277 };     /* pulse width, Q15 of a cycle: square .. 10 % */
@@ -89,7 +102,7 @@ static const int32_t T_LPK[5]   = { 3, 6, 12, 24, 40 };                  /* tone
 static const int32_t T_NASAL[5] = { 0, 9830, 21299, 16384, 11469 };      /* formant gain (x2 below: 0 .. 1.3) */
 static const int32_t T_FHZ[5]   = { 900, 1100, 1300, 1650, 2100 };       /* formant centre, Hz */
 static const int32_t T_NOISE[5] = { 1100, 900, 750, 750, 900 };          /* bow noise */
-static const int32_t T_LEVEL[5] = { 19285, 21408, 26288, 24156, 19762 }; /* loudness compensation */
+static const int32_t T_LEVEL[5] = { 19285, 21408, 30027, 24156, 19762 }; /* loudness compensation */
 
 /* ---------------------------------------------------------------- DRONE: the knob's map */
 static const int32_t T_DLEVEL[5] = { 0, 9000, 16000, 21000, 24500 };    /* drone level against the string */
@@ -106,8 +119,37 @@ static const uint32_t KEY_INC[12] = { 6370030u, 6748811u, 7150117u, 7575285u, 80
 /* page-2 word 5 (blue pushed): 13 zones, 0 = FOLLOW, 1 .. 12 = C .. B */
 static inline int drone_key(const int16_t *k) { return (int)((knob(k, 5) * 13) >> 15); }
 
+/* ---------------------------------------------------------------- WHEEL BUZZ: the knob's map */
+static const int32_t T_BLEVEL[5]  = { 0, 18000, 27000, 31000, 32767 };  /* buzz level against the string */
+static const int32_t T_BBASE[5]   = { 0, 0, 4915, 14746, 29491 };        /* steady wheel pressure: 0, 0, .15, .45, .9 */
+static const int32_t T_BSTROKE[5] = { 0, 16384, 27853, 24576, 16384 };   /* stroke depth: .5, .85, .75, .5 */
+static const int32_t T_BJIT[5]    = { 3277, 6554, 11469, 16384, 22938 }; /* per-cycle slap jitter: the rattle */
+static const int32_t T_BNOISE[5]  = { 2000, 4000, 7000, 10000, 12500 };  /* noise inside the slap */
+static const int32_t T_BHZ[5]     = { 1700, 2000, 2400, 2800, 3200 };    /* bridge resonance */
+static const int32_t T_BQ[5]      = { 8192, 6554, 5461, 4681, 4096 };    /* its damping: Q 4 .. 8 */
+static const int32_t T_BTONE[5]   = { 0, 5000, 8000, 9500, 10500 };      /* the trompette string's own tone */
+static const int32_t T_GRIT[5]    = { 0, 0, 0, 4500, 9000 };          /* melody per-cycle roughness */
+static const int32_t T_SWELL[5]   = { 0, 2500, 4500, 4000, 3000 };       /* the strokes swelling the string */
+#define BUZZ_THRESH 9830                 /* wheel pressure (Q15) where the dog starts to lift: 0.3 */
+/* page-2 word 7 (white pushed): 5 zones, steady / 1/4 / 1/8 / 1/8T / 1/16; strokes per beat */
+static const uint8_t STROKES[5] = { 0, 1, 2, 3, 4 };
+static inline int stroke_zone(const int16_t *k) { return (int)((knob(k, 7) * 5) >> 15); }
+
+/* stroke envelope from the stroke phase (Q32): a 7 % rise, then a squared fall over the rest */
+static inline int32_t stroke_env(uint32_t sp)
+{
+    const int32_t p = (int32_t)(sp >> 16);                                 /* 0 .. 65535 */
+    if (p < 4588) return clampi((p * 7314) >> 10, 0, 32767);
+    const int32_t r = ((65536 - p) * 17617) >> 15;                         /* 0 .. 32767 */
+    return (r * r) >> 15;
+}
+
+/* shared wheel: the stroke phase when the beat clock is not moving (advanced once per block) */
+static uint32_t wheel_free;
+static uint8_t wheel_new_block;
+
 /* ramped gains: each moves linearly across the block from the previous block's value */
-enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, NG };
+enum { G_FLUTE, G_REED, G_SAW, G_NOISE, G_NASAL, G_OUT, G_DRONE, G_BUZZ, NG };
 
 typedef struct {
     uint32_t ph;                 /* melody string phase (2^32 = one cycle) */
@@ -123,6 +165,13 @@ typedef struct {
     uint32_t dinc[3];            /* their increments in the last block rendered (to rewind a copied state) */
     int32_t dlp, dbp;            /* drone low-pass (SVF) */
     int32_t dgain;               /* ownership fade, Q15 */
+    /* trompette and dog (with the drone owner) */
+    uint32_t tph, tinc;          /* trompette phase and its last increment */
+    int32_t slap, rattle;        /* this cycle's slap and its noise envelope */
+    int32_t rlp, rbp;            /* bridge resonance (SVF) */
+    int32_t tlp;                 /* trompette tone low-pass */
+    int32_t amp;                 /* smoothed dog amplitude (Q15) */
+    int32_t mjit;                /* melody grit: this cycle's gain */
     uint8_t held, fresh;
 } voice_t;
 
@@ -145,6 +194,8 @@ static void take_drone(int to)
     const int ahead = v_blk[from] == blk;                  /* the old owner has rendered this block already */
     for (int j = 0; j < 3; j++) b->dph[j] = a->dph[j] - (ahead ? a->dinc[j] * BLK : 0u);
     b->dlp = a->dlp; b->dbp = a->dbp;
+    b->tph = a->tph - (ahead ? a->tinc * BLK : 0u);
+    b->slap = a->slap; b->rattle = a->rattle; b->rlp = a->rlp; b->rbp = a->rbp; b->tlp = a->tlp; b->amp = a->amp;
 }
 
 static void hs_note_on(void *self, const int16_t *k)
@@ -163,7 +214,9 @@ static void hs_note_on(void *self, const int16_t *k)
     if (owner < 0) {                        /* the first note ever: a fresh drone */
         v->dph[0] = 0; v->dph[1] = 0x55555555u; v->dph[2] = 0;
         v->dlp = v->dbp = 0;
+        v->tph = 0; v->slap = v->rattle = v->rlp = v->rbp = v->tlp = v->amp = 0;
     }
+    v->mjit = 32767;
     /* the owner keeps its drone state when it is re-triggered (a stolen or repeated note): no restart */
     v->held = 1;
     v->fresh = 1;
@@ -184,7 +237,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     const int32_t *inc = OP1_PITCH_INC;
 
     /* shared, once per block: the block count; then this voice's pitch and the drone's owner */
-    if (vi <= last_vi) blk++;
+    if (vi <= last_vi) { blk++; wheel_new_block = 1; }
     last_vi = vi;
     v_inc[vi] = (uint32_t)inc[0];
     {
@@ -198,7 +251,28 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
 
     /* knobs: ~6 ms smoothing (two blocks); a fresh note starts at the current position */
     for (int i = 0; i < 4; i++) v->ks[i] += (knob(k, i) - v->ks[i]) >> 1;
-    const int32_t d = v->ks[0], s = v->ks[1];
+    const int32_t d = v->ks[0], s = v->ks[1], bz = v->ks[2];
+
+    /* the wheel: stroke phase at the block start and its step per sample, from the beat clock (once per block) */
+    uint32_t sp = 0, sinc = 0;
+    const int zone = stroke_zone(k);
+    if (STROKES[zone]) {
+        op1_beat_t bc;
+        op1_beat_clock(&bc);
+        const int32_t len_s = bc.len > 0 ? clampi(bc.len >> 14, 4410, 176400) : 22050;  /* samples per beat */
+        sinc = (0xFFFFFFFFu / (uint32_t)len_s) * STROKES[zone];
+        if (bc.len > 0 && bc.step > 0) {
+            const int32_t next_s = clampi(bc.next >> 14, 0, len_s);
+            const uint32_t bp15 = 32768u - (((uint32_t)next_s << 15) / (uint32_t)len_s);   /* beat phase */
+            sp = (bp15 * STROKES[zone]) << 17;
+            if (bc.step != 0x100000) sinc = (sinc >> 10) * (uint32_t)(clampi(bc.step, 0, 0x400000) >> 10);
+            wheel_free = sp;                                               /* the free phase continues from here */
+        } else {
+            if (wheel_new_block) wheel_free += sinc * BLK;
+            sp = wheel_free;
+        }
+    }
+    wheel_new_block = 0;
 
     /* pitch: drift wanders to a new random target every ~0.15 s on average (~0.2 s glide) */
     if ((lcg(&v->rng) >> 24) < 5) v->drift_t = ((int32_t)(lcg(&v->rng) >> 24) - 128) * 3 >> 2;   /* +-96 */
@@ -233,6 +307,10 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     /* drone: ownership fade, then its level */
     v->dgain = clampi(v->dgain + (vi == owner ? DRONE_FADE : -DRONE_FADE), 0, 32767);
     t[G_DRONE] = (tab5(T_DLEVEL, d) * v->dgain) >> 15;
+    t[G_BUZZ]  = bz < 1000 ? 0 : (tab5(T_BLEVEL, bz) * v->dgain) >> 15;   /* the bottom 3 %: off */
+#ifdef HS_TEST_SOLO_DRONE
+    t[G_DRONE] = 0;                              /* (solo builds measure one part at a time: the buzz here) */
+#endif
     const uint32_t pw = (uint32_t)tab5(T_PW, s) << 17;
     const int32_t f0x = (dt * 1378) >> 10;                                 /* the pitch in Hz (dt * 44100 / 32768) */
     const int32_t ta = onepole_coef((((tab5(T_LPK, s) * f0x) >> 0) * bow) >> 15);
@@ -244,6 +322,9 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
     for (int i = 0; i < NG; i++) { g0[i] = v->g[i]; dg[i] = t[i] - v->g[i]; v->g[i] = t[i]; }
     /* the sine pair only while it is heard (STRINGS below ~55 %, or fading out) */
     const int flute = g0[G_FLUTE] | t[G_FLUTE];
+    const int32_t grit = tab5(T_GRIT, bz);
+    int32_t mjit = v->mjit;
+    const int rough = grit || mjit != 32767;                               /* grit on, or its last cycle to finish */
 
     uint32_t ph = v->ph, rng = v->rng;
     int32_t tone = v->tone, flp = v->flp, fbp = v->fbp;
@@ -260,7 +341,9 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         const int32_t ga = gs + (gr >> 1), gp = gr >> 1;
         const int32_t gbq = (fq * gb) >> 14;                               /* formant: unity at the centre, x2 */
         for (int n = 0; n < 16; n++, ip++) {
+            const uint32_t pold = ph;
             ph += (uint32_t)*ip + doff;
+            if (rough && ph < pold) mjit = 32767 - (int32_t)(((lcg(&rng) >> 17) * (uint32_t)grit) >> 15);   /* new cycle */
             const int32_t saw = blep_saw(ph, dt, inv8);
             const int32_t saw2 = blep_saw(ph - pw, dt, inv8);              /* the pulse's second edge */
             int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;               /* +-16384 */
@@ -272,6 +355,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 const int32_t fl = -sine(ph) - ((sine(ph * 3u) * 6554) >> 15);   /* +-39322 */
                 raw += (fl * gf) >> 15;
             }
+            if (rough) raw = (raw * mjit) >> 15;                           /* grit */
             tone += (((raw - tone) >> 1) * ta) >> 14;
             /* nasal formant: Chamberlin SVF on half the raw signal, band output normalised to unity gain at the
              * centre (x fq), then x2 (>> 14) for the halved input */
@@ -282,14 +366,17 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         }
     }
     v->ph = ph; v->rng = rng;
-    v->tone = tone; v->flp = flp; v->fbp = fbp;
+    v->tone = tone; v->flp = flp; v->fbp = fbp; v->mjit = mjit;
 
     /* ---- drone: the owner, and a former owner while it fades out */
-    if (g0[G_DRONE] | t[G_DRONE]) {
+    uint32_t ri[BLK];                                                      /* drone root increment per sample */
+    const int run_drone = (g0[G_DRONE] | t[G_DRONE]) != 0, run_buzz = (g0[G_BUZZ] | t[G_BUZZ]) != 0;
+    if (run_drone || run_buzz) {
         const int key = drone_key(k);
-        uint32_t ri[BLK];                                                  /* root increment per sample */
         if (key) for (int n = 0; n < BLK; n++) ri[n] = KEY_INC[key - 1];
         else for (int n = 0; n < BLK; n++) ri[n] = (uint32_t)inc[n] >> 1;
+    }
+    if (run_drone) {
         const uint32_t r0 = ri[0], f0 = r0 + (r0 >> 1), s0 = r0 >> 1;
         const uint32_t roff = (uint32_t)((int32_t)(r0 >> 15) * ROOT_DET), foff = (uint32_t)((int32_t)(f0 >> 15) * FIFTH_DET);
         const int32_t rdt = clampi((int32_t)((r0 + roff) >> 17), 1, 16384), fdt = clampi((int32_t)((f0 + foff) >> 17), 1, 16384);
@@ -323,10 +410,62 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         v->dinc[0] = v->dinc[1] = v->dinc[2] = 0;
     }
 
-    /* ---- output: DC blocker, level x velocity */
+    /* ---- wheel buzz: the trompette and its dog (the owner, and a former owner while it fades out) */
+    int32_t senv[8];                                                       /* stroke envelope per sub-block */
+    for (int sb = 0; sb < 8; sb++) senv[sb] = sinc ? stroke_env(sp + sinc * (uint32_t)(sb * 16 + 8)) : 32767;
+    if (run_buzz) {
+        const int32_t base = tab5(T_BBASE, bz), depth = tab5(T_BSTROKE, bz), jit = tab5(T_BJIT, bz);
+        const int32_t bnz = tab5(T_BNOISE, bz), btone = tab5(T_BTONE, bz);
+        const int32_t fr = svf_coef(tab5(T_BHZ, bz)), rq = tab5(T_BQ, bz);
+        const int32_t tlc = 7900;                                          /* trompette tone low-pass, ~1.9 kHz */
+        /* an octave above the root, folded up to at least C3: a trompette never sits lower, and below that the
+         * slaps stop fusing into a buzz and come apart as ticks */
+        int tsh = 1;
+        while (tsh < 6 && (ri[0] << tsh) < 12740060u) tsh++;
+        uint32_t tph = v->tph, rng = v->rng;
+        int32_t slap = v->slap, rattle = v->rattle, rlp = v->rlp, rbp = v->rbp, tlp = v->tlp, amp = v->amp;
+        int32_t *b = buf;
+        for (int sb = 0; sb < 8; sb++) {
+            /* wheel pressure through the dog's threshold: 0 below it, full 0.4 above it */
+            const int32_t drive = base + ((depth * senv[sb]) >> 15);
+            amp += (clampi(((drive - BUZZ_THRESH) * 5) >> 1, 0, 32767) - amp) >> 1;
+            const int32_t gz = g0[G_BUZZ] + ((dg[G_BUZZ] * (sb + 1)) >> 3);
+            const int32_t tg = (btone * (19661 + ((amp * 13107) >> 15))) >> 15;   /* string tone 0.6 .. 1 with pressure */
+            for (int n = 0; n < 16; n++, b++) {
+                const uint32_t told = tph;
+                tph += ri[sb * 16 + n] << tsh;
+                if (tph < told) {                                          /* a new cycle: the dog slaps */
+                    const int32_t u = (int32_t)(lcg(&rng) >> 17);
+                    slap = (amp * (32767 - ((u * jit) >> 15))) >> 15;
+                    rattle = (slap * bnz) >> 15;
+                }
+                const int32_t nz = (int32_t)(lcg(&rng) >> 17) - 16384;
+                const int32_t exc = slap + ((nz * rattle) >> 14);
+                slap -= slap >> 3;                                         /* ~0.2 ms */
+                rattle -= rattle >> 5;                                     /* ~0.7 ms */
+                /* bridge resonance: SVF band-pass on a quarter of the excitation, normalised (x rq) and x4 */
+                rlp += (fr * rbp) >> 15;
+                const int32_t hp = (exc >> 2) - rlp - ((rq * rbp) >> 15);
+                rbp += (fr * hp) >> 15;
+                const int32_t ring = (rbp * rq) >> 13;
+                /* the trompette's own tone: a plain saw, darkened */
+                tlp += ((((int32_t)(tph >> 16) - 32768) - tlp) * tlc) >> 15;
+                const int32_t y = ring + (exc >> 1) + ((tlp * tg) >> 15);
+                *b += (clampi(y, -65535, 65535) * gz) >> 15;
+            }
+        }
+        v->tph = tph; v->tinc = ri[BLK - 1] << tsh; v->rng = rng;
+        v->slap = slap; v->rattle = rattle; v->rlp = rlp; v->rbp = rbp; v->tlp = tlp; v->amp = amp;
+    } else {
+        v->tinc = 0;
+    }
+
+    /* ---- output: DC blocker, level x velocity, the strokes swelling the string */
+    const int32_t swell = tab5(T_SWELL, bz);
     int32_t dc8 = v->dc8;
     for (int sb = 1; sb <= 8; sb++) {
-        const int32_t go = g0[G_OUT] + ((dg[G_OUT] * sb) >> 3);
+        int32_t go = g0[G_OUT] + ((dg[G_OUT] * sb) >> 3);
+        go += (go * ((swell * senv[sb - 1]) >> 15)) >> 15;
         for (int n = 0; n < 16; n++) {
             const int i = (sb - 1) * 16 + n;
             int32_t y = buf[i];
@@ -340,4 +479,4 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
 }
 
 const op1_engine_t ENGINE_hollow_saint = { hs_note_on, hs_render, hs_note_off,
-                                           { OP1_PRESS_PAGE, OP1_PRESS_NONE, OP1_PRESS_NONE, OP1_PRESS_NONE } };
+                                           { OP1_PRESS_PAGE, OP1_PRESS_NONE, OP1_PRESS_PAGE, OP1_PRESS_NONE } };

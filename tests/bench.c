@@ -38,7 +38,7 @@ static double run(const int16_t *k4)
         host_voice_vel[v] = 100 << 8;
         ENGINE.note_on(OP1_VOICE(v), k);
     }
-    const int blocks = 44100 * 20 / OP1_BLOCK;
+    const int blocks = 44100 * 6 / OP1_BLOCK;
     struct timespec t0, t1;
     clock_gettime(CLOCK_MONOTONIC, &t0);
     for (int b = 0; b < blocks; b++)
@@ -56,7 +56,12 @@ int main(void)
 {
     for (int i = 0; i < 8192; i++) host_sine[i] = (int16_t)lrint(32767.0 * sin(2 * M_PI * i / 8192.0));
     static const int16_t mid[4] = { 16384, 16384, 16384, 16384 }, hi[4] = { 32767, 32767, 32767, 32767 }, lo[4] = { 0 };
-    double a = run(mid), b = run(hi), c = run(lo);
+    /* the minimum of 5 runs per setting: the host's own noise only ever adds time */
+    double a = 1e18, b = 1e18, c = 1e18;
+    for (int r = 0; r < 5; r++) {
+        double x = run(mid), y = run(hi), z = run(lo);
+        if (x < a) a = x; if (y < b) b = y; if (z < c) c = z;
+    }
     double worst = a > b ? (a > c ? a : c) : (b > c ? b : c);
     printf("%.0f (mid %.0f, max %.0f, zero %.0f)\n", worst, a, b, c);
     return 0;
