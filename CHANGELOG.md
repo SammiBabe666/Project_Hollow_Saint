@@ -2,6 +2,15 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## 0.6.0 build (the first .knl)
+- `release/hollow_saint.knl` built with a Blackfin toolchain (GCC 13.3.0, binutils 2.42) compiled from source
+  (`toolchain/build_toolchain.sh`); that toolchain rebuilds 11 of Hundekraft's published plugins byte for byte.
+- Checks: SDK packer; the core's loader code and the reference loader at two addresses; structure compared with
+  erdtree.knl; the compiled code run in the Blackfin simulator, bit-identical to the host build; Blackfin cycle counts
+  against shipped engines.
+- `release/presets/`: the 8 presets as a folder to copy into the OP-1's synth folder.
+- No change to the engine since 0.6.0 (the file's version string stays 0.6.0).
+
 ## 0.6.0
 - 8 presets: hollow saint, midnight vigil, howling dog, ash procession, bone flute, crypt drone, plague dance,
   drowned bell. OP-1 patch files with type "hollow saint", page-2 words for drone key and stroke rate, values inside

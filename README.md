@@ -5,6 +5,9 @@ A haunted hurdy-gurdy for the **original Teenage Engineering OP-1**: a kennel sy
 can hold a key like real bourdons, a buzzing bridge that kicks in on tempo-locked wheel strokes, and a cathedral that
 darkens, rings and tolls a distant bell. Pure synthesis, no samples. Version **0.6.0**.
 
+**Install file: `release/hollow_saint.knl`** (31,516 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
+folder `release/presets/`.
+
 ## Status: what has and has not been done
 
 | Stage | Status |
@@ -12,12 +15,16 @@ darkens, rings and tolls a distant bell. Pure synthesis, no samples. Version **0
 | Engine written against the real kennel 3.0.3 SDK (`op1_plugin.h`, manifest rules, exported imports) | done |
 | **Host-tested engine**: firmware-simulating test suite under AddressSanitizer + UndefinedBehaviorSanitizer | **passes** (results below) |
 | Screen art checked with the SDK's `svg_check.py` (decimals, stroke turn-backs) | passes |
-| Compiled with the packer's flags (host GCC 13.3, same major version as the Workshop's Blackfin GCC 13.3): only import is `op1_eng_page`, which the core exports | done (a proxy, not the Blackfin build) |
-| **Blackfin build and `.knl` package** (`tools/kennel/pack.py`) | **not done**: no `bfin-elf` toolchain could be obtained in the build environment |
+| Blackfin toolchain (`bfin-elf-gcc` 13.3.0, binutils 2.42) built from source (`toolchain/build_toolchain.sh`) | done; **reproduces Hundekraft's official build**: 11 of the Workshop's own plugins rebuilt from the 3.0.3 source are byte-for-byte identical to the files it publishes |
+| **`.knl` package** built with the SDK's packer (`tools/kennel/pack.py`): SVG, relocation and import checks | **done**: one import, `_op1_eng_page`, exported by the 3.0.3 core |
+| **Loader**: the core's own loader code (`kn_load.c`) and the reference loader accept it and relocate it to identical images at two addresses; structure matches a known-good plugin (`erdtree.knl`) | **passes** |
+| **The compiled Blackfin code, run** in the Blackfin instruction-set simulator at the firmware's fixed addresses: audio bit-identical to the host-tested build (138,240 samples) | **passes** |
 | Loaded in the Workshop / OP1-Emulator | not done |
 | **Tested on OP-1 hardware** | **not done** |
 
-Nothing here claims more than the table says. A successful host test is not proof of correct behaviour on the OP-1.
+Nothing here claims more than the table says. The simulator runs the engine's code, not the OP-1's firmware, so the
+Workshop install, the screen on the real display and playing on the instrument are still untested. Details:
+`results/blackfin_results.md`.
 
 ## Contents
 
@@ -35,12 +42,21 @@ tests/host.py                 host checks: phrase | suite | bench | cost
 tests/suite.c                 firmware-simulating test suite
 tests/perform.c               engine + screen from one script: WAV + per-frame screen state
 tests/host_sdk/harness/       op1r host mocks (op1_host.h, audio_harness.c), credited
+tests/kn_load_host.c          runs the core's own loader (kn_load.c) on a .knl
+tests/bfin_sim/               the compiled engine in the Blackfin simulator: cycles + bit-exact audio vs the host build
+tools/build_knl.sh            pack + check with both loaders
+tools/compare_knl.py          header and metadata of .knl files side by side
+toolchain/                    build_toolchain.sh (bfin-elf from git sources), MPC/MPFR shim, timestamp fix
+release/                      hollow_saint.knl (+ sha256) and the presets folder, ready to install
+results/                      test results, preset audio previews, screen preview
 ```
 
 ## Build the `.knl`
 
-Needs the matching SDK and a Blackfin cross compiler (`bfin-elf-gcc` 13.3 + binutils; see the SDK's
-`docs/op1r-src-README.md` for the toolchain). No original R246, device key or firmware build is needed.
+`release/hollow_saint.knl` is already built. To rebuild it you need the matching SDK and a Blackfin cross compiler
+(`bfin-elf-gcc` 13.3.0 + binutils). `toolchain/build_toolchain.sh` builds one from git sources (about an hour on two
+cores); with GNU release tarballs the SDK's own recipe (`docs/op1r-src-README.md`) is simpler. No original R246,
+device key or firmware build is needed. `tools/build_knl.sh` packs and runs both loader checks in one go.
 
 ```sh
 # 1. get the SDK that matches your OP-1's firmware (here 3.0.3) and verify it
@@ -62,11 +78,11 @@ anything the core does not export.
 
 1. The OP-1 must run Hundekraft **3.0.x** (the kennel core). First installation is a full firmware build from the
    Workshop through the boot menu; see the Workshop's quick start.
-2. In the Workshop, open **Your plugins**, add `hollow_saint.knl`, connect the OP-1 by USB and press **Update OP-1**.
+2. In the Workshop, open **Your plugins**, add `release/hollow_saint.knl`, connect the OP-1 by USB and press **Update OP-1**.
    Review, send, then press **T1** on the OP-1 to confirm. It installs on the confirmed restart (no hot reload).
 3. On the OP-1: **synth**, then **Shift + T1**, choose **hollow saint**.
-4. Presets: **Shift + COM**, then **T3** (disk mode). Copy the `presets` folder into the OP-1's `synth` folder (for
-   example as `synth/hollow saint/`) and eject.
+4. Presets: **Shift + COM**, then **T3** (disk mode). Copy the folder `release/presets/synth/hollow saint` into the
+   OP-1's `synth` folder and eject.
 
 If the OP-1 does not start after adding a plugin: power-cycle it; it starts once without plugin files, then remove
 the plugin in the Workshop.
@@ -106,33 +122,40 @@ CATHEDRAL; the saint's halo widens and flares and the bell swings at each bell s
 Page 2 of blue shows a one-octave keyboard with the drone's key (or the FOLLOW arrow); page 2 of white shows the beat
 cut into the chosen stroke rate.
 
-## Test results (host, this version)
+## Test results (this version)
 
 `python3 tests/host.py suite`, ASan + UBSan, firmware simulation (6 voices, stealing, stock-like envelope applied after
 render, stale pitch at note-on, beat clock): **all checks pass**, no clicks detected, no DC, no runaway in a 20 s hold at
 maximum settings, every scenario within its bus-peak limit. The click detector itself was validated on a planted phase
 jump. `python3 tests/host.py phrase` (the SDK harness's standard phrase render) passes.
 
-CPU, estimated: executed x86 instructions per voice-block inside `render` (valgrind), compared with engines that ship
-in the same core, same harness (`python3 tests/host.py cost`):
+The compiled Blackfin code, run in the Blackfin instruction-set simulator (`tests/bfin_sim/run.sh`), produces audio
+bit-identical to the host build, so these results hold for the code in the `.knl`.
 
-| Engine | Worst knob setting | Defaults |
+CPU on the Blackfin instruction set: simulator cycles per 128-sample voice block, same harness for every engine:
+
+| Engine | Defaults-like (all 50 %) | Worst knob setting |
 |---|---|---|
-| hollow_saint | **1.12 × EVA** | 0.98 × EVA |
-| EVA / Taffy / Wavetable (shipping) | 1.00 / 1.06 / 1.14 × EVA | |
+| hollow_saint | 29,675 | **34,969** (all at maximum) |
+| EVA (ships) | 18,877 | 20,286 |
+| Wavetable (ships) | 27,437 | 27,437 |
+| Taffy (ships) | 39,467 | 39,467 |
 
-This is a proxy, not a measurement on the OP-1's Blackfin. On hardware, check peak load in the resource monitor
-(clock screen, T1) with six voices, a heavy effect and the knobs at maximum.
+Six voices at Hollow Saint's worst setting come to about 72 M cycles a second, roughly 18 % of the OP-1's 400 MHz
+core by the simulator's model, which does not model every stall. That sits between two engines the Workshop ships.
+On the instrument, check peak load in the resource monitor (clock screen, T1) with six voices, a heavy effect and the
+knobs at maximum. (An earlier x86 instruction-count estimate put it at 1.12 × EVA; on the real instruction set it is
+about 1.7 × EVA.)
 
 Loudness at defaults sits about 1 dB under EVA, with more chord headroom (6-voice chord peak 25,199 vs EVA 29,281).
-Memory: 13.4 KB of static state (six voices' delay lines and filters; `.bss` of a 32-bit build with the packer's
-flags), about 13 KB of code on x86-32 (Blackfin will differ), and the 13.7 KB SVG: the `.knl` should be a few tens of
-KB, far under the Workshop's 512 KiB file limit. No allocation at run time.
+Memory: 13,372 bytes of static state (six voices' delay lines and filters), 11.5 KB of code, the 14 KB SVG; the
+`.knl` is 31.5 KB, far under the Workshop's 512 KiB limit. No allocation at run time. Stack in `render`: 700 bytes
+(EVA's 740, MBIRA's 800).
 
 ## Known limitations
 
-- **Untested beyond the host**: not compiled for Blackfin, not packed, not loaded in the Workshop, not played on an
-  OP-1. The CPU figure is an estimate.
+- **Not yet run on an OP-1 or loaded through the Workshop.** The package, the loader checks and the compiled code are
+  verified on the PC and in the Blackfin simulator; the install, the real screen and the real CPU load are not.
 - **The drone needs a sounding note.** The OP-1 gives an engine only its voices, each multiplied by its own envelope
   after render, so no engine can run a drone on its own. The drone sounds while any note sounds, follows its owner's
   envelope, and stops when the last release ends. A fixed key ignores octave, transpose and global tune.
