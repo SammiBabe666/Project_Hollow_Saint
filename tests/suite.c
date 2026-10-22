@@ -278,6 +278,8 @@ int main(int argc, char **argv)
         if (argc > 2 && strcmp(argv[2], scen[s].name)) continue;
         reset_all();
         for (int k = 0; k < 4; k++) knobs[k] = DEF[k];
+        const char *ov = getenv("KNOBS");                 /* KNOBS=a,b,c,d: other starting knobs */
+        if (ov) { int a[4]; if (sscanf(ov, "%d,%d,%d,%d", &a[0], &a[1], &a[2], &a[3]) == 4) for (int k = 0; k < 4; k++) knobs[k] = (int16_t)a[k]; }
         scen[s].fn();
         write_wav(scen[s].name);
         int32_t peak = 0; double sum = 0;

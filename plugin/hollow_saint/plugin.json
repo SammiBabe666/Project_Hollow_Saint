@@ -8,12 +8,12 @@
     "hollow_saint.c"
   ],
   "defaults": [
-    4000,
+    16384,
+    16384,
     12000,
-    6000,
-    24000
+    12000
   ],
   "claims": [],
   "author": "cathedral of the hollow saint",
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
