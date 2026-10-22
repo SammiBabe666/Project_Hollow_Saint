@@ -1,0 +1,17 @@
+Cathedral of the Hollow Saint (hollow_saint) - a hurdy-gurdy synth plugin for the original OP-1 (kennel)
+Copyright (C) 2026 the hollow_saint authors
+
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public
+License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later
+version, with the additional permission to combine it with the Teenage Engineering OP-1 firmware stated in
+NOTICE.kennel (kennel's NOTICE, which carries op1r-src's). It is distributed WITHOUT ANY WARRANTY; see LICENSE.
+
+Parts from other authors, under the same terms:
+- kennel SDK interfaces and plugin template: Hundekraft (kennel), pcppcp (op1r-src)
+- polyBLEP saw formulation: Hundekraft, EVA (plugins/eva/eva.c)
+- preset file writer: Hundekraft, MBIRA (plugins/mbira/presets.py)
+- host test mocks tests/host_sdk/harness/op1_host.h and audio_harness.c: pcppcp, op1r-src
+
+The artwork (tools/gen_screen.py, plugin/hollow_saint/hollow_saint.svg), the synthesis design and the presets are
+original. This package contains no Teenage Engineering firmware, artwork or fonts. Not affiliated with Teenage
+Engineering.

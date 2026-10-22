@@ -7,15 +7,15 @@
   "sources": [
     "hollow_saint.c"
   ],
+  "cflags": [
+    "-fno-tree-loop-distribute-patterns"
+  ],
   "defaults": [
     16384,
     16384,
     12000,
     12000
   ],
-  "claims": [],
-  "author": "cathedral of the hollow saint",
-  "version": "0.6.0",
   "page2_defaults": [
     0,
     0,
@@ -24,5 +24,8 @@
   "screen": {
     "svg": "hollow_saint.svg",
     "symbol": "SCREEN_hollow_saint"
-  }
+  },
+  "claims": [],
+  "author": "cathedral of the hollow saint",
+  "version": "0.6.0"
 }
