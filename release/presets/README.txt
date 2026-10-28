@@ -5,12 +5,14 @@ into the OP-1's "synth" folder, then eject. The presets need the hollow_saint pl
 on the stock iter engine and keep their name.
 
 hollow saint     the default: follow drone, nasal strings, 1/8 wheel strokes, a little cathedral
-midnight vigil   slow and dark, drone fixed on D, steady wheel, deep cathedral, long release
+midnight vigil   slow and dark, drone fixed on D, the wheel breathes once a bar, deep cathedral, long release
 howling dog      aggressive: bright strings, 1/16 buzz, dry
 ash procession   drone fixed on G, 1/4 strokes, processional
 bone flute       hollow flute-like strings, no buzz, tremolo, octave up
-crypt drone      full drone fixed on C, octave down, long release
+crypt drone      full drone fixed on C, octave down, half-bar swells, long release
 plague dance     bright folk dance, 1/8 triplet buzz, dry and short
-drowned bell     cathedral at full, distant bells, drone fixed on A, long release
+drowned bell     cathedral at full, distant bells, drone fixed on A, half-bar swells, long release
+
+Each preset also sets its own Lo-Fi Relic age: push green to hear it (push again for the clean sound).
 
 Tip: the cathedral rings through the release (T2): keep the release long to hear it.
