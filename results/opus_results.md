@@ -1,4 +1,4 @@
-# hollow_saint 0.7.0 on Opus 2: build and verification (2026-10-31)
+# hollow_saint 0.7.8 on Opus 2: build and verification (2026-10-31)
 
 Not run on an OP-1 or in an Opus 2 emulator. What was checked:
 
@@ -7,14 +7,15 @@ Not run on an OP-1 or in an Opus 2 emulator. What was checked:
 2.13) and bfin-elf-gcc 13.3.0 + binutils 2.42 (the same toolchain still rebuilds `release/hollow_saint.knl` byte for byte,
 sha256 a3feff47...). The kit compiles with `-Wall -Wextra -Werror`: no warnings.
 
-    release/opus/hollow_saint.opmod: sammi.hollow_saint 0.7.0, 61,308 bytes
-    image 53,244 bytes, zero fill 14,116, 565 relocations
+    release/opus/hollow_saint.opmod: sammi.hollow_saint 0.7.8, 63,860 bytes
+    image 55,844 bytes, zero fill 14,116, 561 relocations
     imports: fw_node_set_matrix, fw_screen_draw, fw_svg_node_find, opus_art_text, opus_engine_add,
              opus_engine_knob_set, opus_engine_knobs, opus_engine_live, opus_log, opus_page_bar, opus_page_text
     cpu 230000 (an estimate, cpu.txt; not measured on a device)
 
-`plugin_tool.py svg plugin/hollow_saint/hollow_saint.svg`: 0 errors. 36 warnings: paths with several M commands, and
-two dots below y 146 that the OP-1's window hides. The art is the same one the kennel screen draws.
+`plugin_tool.py svg plugin/hollow_saint/hollow_saint.svg`: 0 errors. 34 warnings, all paths with several M commands.
+The art is the same one the kennel screen draws (0.7.8: 0.7.7's drawing); the moving parts on it are checked in
+the kennel frames of build-0.7.8 (the Opus build runs the same screen code).
 
 ## The glue, on the PC (tests/opus_host/run.sh, ASan + UBSan)
 26 checks pass: registration (name, OS voices, type "hollow saint", the svg path, new-sound knobs), the three pushes,

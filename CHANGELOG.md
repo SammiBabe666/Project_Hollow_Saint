@@ -2,7 +2,16 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
-## Unreleased: Opus 2 port
+## 0.7.8 (0.7.0 with 0.7.7's screen and default)
+- 0.7.7 was released as a .knl only (`releases/v0.7.7/`); its source was lost. Its disassembly shows its sound and screen
+  code were rewritten, so it can't be rebuilt from 0.7.0. 0.7.8 is 0.7.0 with the two changes 0.7.7's notes name:
+- Screen: 0.7.7's artwork, the whole drawing at 7/8 size and centred (`tools/gen_screen.py` maps it; the SVG is byte
+  for byte the one inside 0.7.7's .knl). `hollow_saint_geom.h` keeps the drawing's own units and adds the map
+  (`HS_S`, `HS_TX`, `HS_TY`); the screen code turns pivots and moves through it.
+- White page 2 starts at steady on a fresh load (manifest default 0, was 1/8). Presets set their own rate.
+- Audio unchanged from 0.7.0.
+
+## 0.7.8 Opus 2 port
 - `opus/sammi.hollow_saint`: the engine as an Opus 2 plugin (`.opmod`, core 2.6). It wraps `hollow_saint.c` unchanged
   through a kennel-API header (`op1_plugin.h` in that folder). It uses OS voices, the "hollow saint" type (so the kennel
   presets load) and its own OS screen. The encoder pushes (page 2) are now handled by the engine's own key and turn
@@ -11,7 +20,7 @@ Each version is a git tag in this repository. Every step was host-tested; none h
   `release/opus/hollow_saint.opmod`.
 - Tests: `tests/opus_host/run.sh` (the glue's checks; audio == the kennel build) and `tests/bfin_sim/run_opus.sh` (the
   compiled `.opmod` code in the Blackfin simulator; audio == the kennel build).
-- The kennel build is unchanged: `tools/build_knl.sh` still reproduces `release/hollow_saint.knl` byte for byte.
+- Built from 0.7.8: the same screen art as the kennel build (`hs_svg.h` regenerated), version 0.7.8.
 
 ## 0.7.0 (Lo-Fi Relic, Crank & Tremor)
 - **Lo-Fi Relic** on the green press (page 2; green then sets its age, word 6): wow and flutter on every pitch (shared

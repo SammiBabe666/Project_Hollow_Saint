@@ -19,7 +19,7 @@
   "page2_defaults": [
     0,
     8192,
-    21064
+    0
   ],
   "screen": {
     "svg": "hollow_saint.svg",
@@ -27,5 +27,5 @@
   },
   "claims": [],
   "author": "cathedral of the hollow saint",
-  "version": "0.7.0"
+  "version": "0.7.8"
 }

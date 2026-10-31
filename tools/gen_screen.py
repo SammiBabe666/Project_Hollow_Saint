@@ -15,6 +15,7 @@ Copyright (C) 2026 the hollow_saint authors. GPL-3.0-or-later with the OP-1 firm
 """
 import math
 import os
+import re
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 OUT = os.path.join(os.path.dirname(HERE), 'plugin', 'hollow_saint')
@@ -297,6 +298,32 @@ for zone, n in enumerate((0, -4, -2, 1, 2, 3, 4)):
     end()
 
 flush(batch); batch.clear()
+
+# 0.7.8: the whole drawing shrunk to 7/8 and centred (the 0.7.7 artwork). Drawn above in the original units, mapped
+# here; hollow_saint_geom.h keeps the original units and gives the map (HS_S, HS_TX, HS_TY) to the C screen code.
+SC, TX, TY = 0.875, 20, 0.375
+NUM = re.compile(r'-?\d+(?:\.\d+)?')
+
+
+def pairs(txt):
+    it = iter(NUM.finditer(txt))
+    res, pos = [], 0
+    for mx in it:
+        my = next(it)
+        res += [txt[pos:mx.start()], f(float(mx.group()) * SC + TX), txt[mx.end():my.start()],
+                f(float(my.group()) * SC + TY)]
+        pos = my.end()
+    return ''.join(res) + txt[pos:]
+
+
+def mapped(el):
+    el = re.sub(r' (d|points)="([^"]*)"', lambda m: f' {m.group(1)}="{pairs(m.group(2))}"', el)
+    el = re.sub(r' cx="([^"]*)" cy="([^"]*)" r="([^"]*)"', lambda m: f' cx="{f(float(m.group(1)) * SC + TX)}" '
+                f'cy="{f(float(m.group(2)) * SC + TY)}" r="{f(float(m.group(3)) * SC)}"', el)
+    return el
+
+
+out = [mapped(el) for el in out]
 svg = ('<svg version="1.1" xmlns="http://www.w3.org/2000/svg" x="0px" y="0px" width="320px" height="160px" '
        'viewBox="0 0 320 160">\n' + '\n'.join(out) + '\n</svg>\n')
 open(os.path.join(OUT, 'hollow_saint.svg'), 'w').write(svg)
@@ -309,6 +336,9 @@ for k, v in geom.items():
     else:
         h.append(f'#define HS_{k} {int(v)}')
 h.append(f'#define HS_RX0 {RX0}')
+h.append(f'#define HS_S {round(SC * 1024)}     /* the map to the screen: x * HS_S + HS_TX, y * HS_S + HS_TY, Q10 */')
+h.append(f'#define HS_TX {round(TX * 1024)}')
+h.append(f'#define HS_TY {round(TY * 1024)}')
 h.append('#endif')
 open(os.path.join(OUT, 'hollow_saint_geom.h'), 'w').write('\n'.join(h) + '\n')
 print(f'hollow_saint.svg: {len(svg)} bytes, {len(out)} elements; hollow_saint_geom.h')

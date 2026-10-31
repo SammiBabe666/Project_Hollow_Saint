@@ -5,7 +5,7 @@ opmod     1
 id        sammi.hollow_saint
 name      Hollow Saint
 author    sammi
-version   0.7.0
+version   0.7.8
 core      2.6
 adds      engine hollow saint
 uses      blue_push synth t1 modal "drone key page"
