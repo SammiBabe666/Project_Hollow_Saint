@@ -6,7 +6,9 @@ its audio and screen frames, with captions, muxed with ffmpeg.
     python3 tools/make_tour.py --features [out.mp4]      0.7.0: Lo-Fi Relic, Crank & Tremor, then the 8 presets
                                                          (default build/tour/hollow_saint_0.7.0_features.mp4)
     python3 tools/make_tour.py --demo [out.mp4]          the engine and its knobs, then both of the above
-                                                         (default build/tour/hollow_saint_0.7.0_demo.mp4)
+                                                         (default build/tour/hollow_saint_<version>_demo.mp4)
+    --stills DIR (with any mode)                         also save screen stills and a short GIF of the screen at
+                                                         the moments in STILLS (the README's docs/media/)
 
 What it is: the engine's own C code rendering audio on a PC, and its own screen code moving the SVG's nodes, drawn by
 tools/render_screen.py's rasteriser. Not an OP-1 recording: no OP-1 FX, the stock envelope is approximated and the
@@ -37,6 +39,15 @@ FONTB = '/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf'
 COLS = [(0x4D, 0x9E, 0xFF), (0x00, 0xED, 0x95), (0xFF, 0xFF, 0xFF), (0xFF, 0x3A, 0x5D)]
 KEYS = ['FOLLOW', 'C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 RATES = P.RATES                                     # steady, 1 bar, 1/2, 1/4, 1/8, 1/8T, 1/16
+VERSION = json.load(open(os.path.join(ROOT, 'plugin', 'hollow_saint', 'plugin.json')))['version']
+# --stills: (file, the caption the moment follows, seconds after that caption appears); .gif: (..., seconds long)
+STILLS = [('screen_default.png', 'HOLLOW SAINT  the default sound', 3.0),
+          ('screen_drone_key.png', 'push BLUE', 2.6),
+          ('screen_stroke_rate.png', 'push WHITE  the stroke rate', 5.0),
+          ('screen_cathedral.png', 'RED  CATHEDRAL', 12.2),
+          ('screen_relic.png', 'turn GREEN while it is on', 5.0),
+          ('screen_crank.png', 'WHITE middle, 1/8', 3.0),
+          ('screen.gif', 'WHITE middle, 1/8', 0.6, 4.0)]
 
 
 def ms(v):                                           # OP-1 ADSR word -> ms: an approximation for the host render
@@ -373,14 +384,19 @@ def _frame(args):
 def main():
     global TAGLINE
     args = sys.argv[1:]
+    stills = None
+    if '--stills' in args:
+        j = args.index('--stills')
+        stills = args[j + 1]
+        del args[j:j + 2]
     mode = next((a for a in args if a in ('--features', '--demo')), '')
     args = [a for a in args if a not in ('--features', '--demo')]
     perf, name = {'--features': (features, 'hollow_saint_0.7.0_features.mp4'),
-                  '--demo': (demo, 'hollow_saint_0.7.0_demo.mp4')}.get(mode, (performance, 'hollow_saint_tour.mp4'))
+                  '--demo': (demo, f'hollow_saint_{VERSION}_demo.mp4')}.get(mode, (performance, 'hollow_saint_tour.mp4'))
     if mode == '--features':
         TAGLINE = '0.7.0: lo-fi relic  /  crank & tremor  /  the presets'
     elif mode == '--demo':
-        TAGLINE = '0.7.0: the engine  /  lo-fi relic  /  crank & tremor  /  the presets'
+        TAGLINE = f'{VERSION}: the engine  /  lo-fi relic  /  crank & tremor  /  the presets'
     mp4 = args[0] if args else os.path.join(OUT_DIR, name)
     os.makedirs(OUT_DIR, exist_ok=True)
     fdir = os.path.join(OUT_DIR, 'frames')
@@ -410,7 +426,28 @@ def main():
     subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(FPS), '-i', os.path.join(fdir, 'f%05d.png'),
                     '-i', base + '.wav', '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-pix_fmt', 'yuv420p',
                     '-c:a', 'aac', '-b:a', '192k', '-shortest', '-movflags', '+faststart', mp4], check=True)
+    if stills:
+        save_stills(frames, fdir, stills)
     print(mp4)
+
+
+def save_stills(frames, fdir, out):
+    """the screen (with its bezel) cropped from the frames at the moments in STILLS"""
+    os.makedirs(out, exist_ok=True)
+    box = (SX - 18, SY - 14, SX + 320 * SC + 18, SY + 160 * SC + 14)
+    for name, cap, after, *dur in STILLS:
+        t0 = next(fr['t'] for fr in frames if fr['caption'].startswith(cap)) + after
+        i0 = next(i for i, fr in enumerate(frames) if fr['t'] >= t0)
+        dst = os.path.join(out, name)
+        if not dur:
+            Image.open(os.path.join(fdir, f'f{i0:05d}.png')).crop(box).save(dst, optimize=True)
+        else:                                        # every other frame (15 fps), half size, one shared palette
+            x0, y0, x1, y1 = box
+            subprocess.run(['ffmpeg', '-y', '-loglevel', 'error', '-framerate', str(FPS), '-start_number', str(i0),
+                            '-i', os.path.join(fdir, 'f%05d.png'), '-frames:v', str(int(dur[0] * FPS)), '-vf',
+                            f'crop={x1 - x0}:{y1 - y0}:{x0}:{y0},fps=15,scale={(x1 - x0) // 2}:-1:flags=lanczos,'
+                            'split[a][b];[a]palettegen=max_colors=64[p];[b][p]paletteuse=dither=none', dst], check=True)
+        print(dst)
 
 
 if __name__ == '__main__':
