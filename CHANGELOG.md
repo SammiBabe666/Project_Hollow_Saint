@@ -2,6 +2,13 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## 0.7.8 download zip
+- `release/hollow_saint-0.7.8.zip`: the prebuilt `hollow_saint.knl`, `mods/hollow_saint.opmod`, the presets as
+  `synth/hollow saint/`, `INSTALL.txt` and `SHA256SUMS.txt`. Nothing to build to install it. Made by `tools/make_zip.py`
+  from `release/` (same plugin files as before, byte for byte).
+- README: a Download section and install steps from the zip for kennel and Opus 2. Building from source moved to
+  `docs/BUILDING.md`.
+
 ## 0.7.8 (0.7.0 with 0.7.7's screen and default)
 - 0.7.7 was released as a .knl only (`releases/v0.7.7/`); its source was lost. Its disassembly shows its sound and screen
   code were rewritten, so it can't be rebuilt from 0.7.0. 0.7.8 is 0.7.0 with the two changes 0.7.7's notes name:

@@ -14,13 +14,20 @@ default sound, every encoder turned and pushed, the Lo-Fi Relic, Crank & Tremor,
 the plugin's own C code (audio and screen), not recorded on an OP-1. Screenshots and what each encoder does:
 [The encoders](#the-encoders).
 
-**Install file: `release/hollow_saint.knl`** (43,256 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
-folder `release/presets/`.
+## Download
 
-**Opus 2:** the same engine also builds as an [Opus 2](https://github.com/LizardMan245/opus) plugin,
-`release/opus/hollow_saint.opmod` (id `sammi.hollow_saint`, core 2.6 or later; the same presets). How to install it,
-its controls and what the port does: [opus/sammi.hollow_saint/README.md](opus/sammi.hollow_saint/README.md). Build it
-with `tools/build_opmod.sh`. The kennel build below is unchanged.
+**[Download hollow_saint-0.7.8.zip](https://github.com/SammiBabe666/Project_Hollow_Saint/raw/main/release/hollow_saint-0.7.8.zip)** (75 KB). Nothing to build: it holds the ready-made plugin for both
+systems and the 8 presets.
+
+| In the zip | For |
+|---|---|
+| `hollow_saint.knl` | [Hundekraft OP-1 Workshop](https://hundekraft.github.io/op1-workshop/index.html) 3.0.x (kennel) |
+| `mods/hollow_saint.opmod` | [Opus 2](https://github.com/LizardMan245/opus), core 2.6 or later |
+| `synth/hollow saint/` | the 8 presets (both) |
+| `INSTALL.txt`, `SHA256SUMS.txt` | the steps below, and checksums of the two plugin files |
+
+Install it as below ([Install](#install)). Building it yourself is optional; that is in
+[docs/BUILDING.md](docs/BUILDING.md).
 
 ## Status: what has and has not been done
 
@@ -41,69 +48,40 @@ Nothing here claims more than the table says. The simulator runs the engine's co
 Workshop install, the screen on the real display and playing on the instrument are still untested. Details:
 `results/blackfin_results.md`.
 
-## Contents
-
-```
-plugin/hollow_saint/          the plugin folder (what goes into kennel's synth_sdk/plugins/)
-  hollow_saint.c              engine + screen (C, fixed point)
-  plugin.json                 kennel manifest
-  hollow_saint.svg            screen artwork (generated, 320 x 160)
-  hollow_saint_geom.h         screen geometry (generated)
-  presets.py, presets/*.aif   8 presets (OP-1 patch files)
-tools/gen_screen.py           editable source of the artwork (generates the SVG and header)
-tools/render_screen.py        preview rasteriser for the native SVG subset
-tools/make_tour.py            builds the tour video from a scripted performance
-tests/host.py                 host checks: phrase | suite | bench | cost
-tests/suite.c                 firmware-simulating test suite
-tests/perform.c               engine + screen from one script: WAV + per-frame screen state
-tests/host_sdk/harness/       op1r host mocks (op1_host.h, audio_harness.c), credited
-tests/kn_load_host.c          runs the core's own loader (kn_load.c) on a .knl
-tests/bfin_sim/               the compiled engine in the Blackfin simulator: cycles + bit-exact audio vs the host build
-tools/build_knl.sh            pack + check with both loaders
-tools/release.sh              one command: host tests, simulator, pack + loader checks, copy to release/
-tools/compare_knl.py          header and metadata of .knl files side by side
-toolchain/                    build_toolchain.sh (bfin-elf from git sources), MPC/MPFR shim, timestamp fix
-release/                      hollow_saint.knl (+ sha256) and the presets folder, ready to install
-results/                      test results, preset audio previews, screen preview
-docs/media/                   README screenshots, screen GIF and the demo video (tools/make_tour.py --stills)
-```
-
-## Build the `.knl`
-
-`release/hollow_saint.knl` is already built. To rebuild it you need the matching SDK and a Blackfin cross compiler
-(`bfin-elf-gcc` 13.3.0 + binutils). `toolchain/build_toolchain.sh` builds one from git sources (about an hour on two
-cores); with GNU release tarballs the SDK's own recipe (`docs/op1r-src-README.md`) is simpler. No original R246,
-device key or firmware build is needed. `tools/build_knl.sh` packs and runs both loader checks in one go;
-`tools/release.sh` runs every check (host suite, simulator bit-exactness, both loaders) and refreshes `release/`.
-
-```sh
-# 1. get the SDK that matches your OP-1's firmware (here 3.0.3) and verify it
-curl -LO https://hundekraft.github.io/op1-workshop/source/hundekraft-3.0.3-source.tar.gz
-curl -LO https://hundekraft.github.io/op1-workshop/source/hundekraft-3.0.3-source.tar.gz.sha256
-sha256sum -c hundekraft-3.0.3-source.tar.gz.sha256
-tar xzf hundekraft-3.0.3-source.tar.gz && cd hundekraft-3.0.3-source/ext/kennel
-
-# 2. put the plugin in and pack it (the folder name, the id and the file name must all be hollow_saint)
-cp -r /path/to/cathedral/plugin/hollow_saint synth_sdk/plugins/hollow_saint
-python3 tools/kennel/pack.py synth_sdk/plugins/hollow_saint -o build/hollow_saint.knl
-#   (toolchain not on PATH: add --toolchain DIR, with DIR/bfin-gcc/bin and DIR/bfin/bin)
-```
-
-The result, `build/hollow_saint.knl`, is the file you install. Read the packer's output: it lists imports and refuses
-anything the core does not export.
-
 ## Install
+
+Unzip [hollow_saint-0.7.8.zip](https://github.com/SammiBabe666/Project_Hollow_Saint/raw/main/release/hollow_saint-0.7.8.zip), then follow the part for your OP-1.
+
+### Hundekraft 3.0.x (kennel)
 
 1. The OP-1 must run Hundekraft **3.0.x** (the kennel core). First installation is a full firmware build from the
    Workshop through the boot menu; see the Workshop's quick start.
-2. In the Workshop, open **Your plugins**, add `release/hollow_saint.knl`, connect the OP-1 by USB and press **Update OP-1**.
-   Review, send, then press **T1** on the OP-1 to confirm. It installs on the confirmed restart (no hot reload).
+2. In the Workshop, open **Your plugins**, add `hollow_saint.knl` from the zip, connect the OP-1 by USB and press
+   **Update OP-1**. Review, send, then press **T1** on the OP-1 to confirm. It installs on the confirmed restart (no hot
+   reload).
 3. On the OP-1: **synth**, then **Shift + T1**, choose **hollow saint**.
-4. Presets: **Shift + COM**, then **T3** (disk mode). Copy the folder `release/presets/synth/hollow saint` into the
-   OP-1's `synth` folder and eject.
 
 If the OP-1 does not start after adding a plugin: power-cycle it; it starts once without plugin files, then remove
 the plugin in the Workshop.
+
+### Opus 2
+
+1. The OP-1 runs Opus 2 with core 2.6 or later (the Opus site's patcher).
+2. Opus's menu (hold synth + drum + tape + mixer), **T1**: switch **developer mode** on for the first tries.
+3. Disk mode (**Shift + COM**, then **T3**). Copy `hollow_saint.opmod` (in the zip's `mods` folder) into the disk's
+   **mods** folder. Eject, switch off and on.
+4. The menu, **T2** (the mods list): the **hollow saint** row should say "loaded".
+5. **synth**, **Shift + T1**, choose **hollow saint**.
+
+Don't load it together with the kennel `hollow_saint.knl` through opus.bridge: both claim the sound type
+"hollow saint", so the later one is refused. Its controls and what the port does:
+[opus/sammi.hollow_saint/README.md](opus/sammi.hollow_saint/README.md).
+
+### Presets (both)
+
+Disk mode (**Shift + COM**, then **T3**). Copy the folder `hollow saint` (inside the zip's `synth` folder) **into** the
+OP-1's `synth` folder and eject. Copy that one folder, not the zip's whole `synth` folder: replacing the OP-1's `synth`
+folder would delete your own patches.
 
 ## The encoders
 
@@ -300,18 +278,9 @@ previews in `results/preset_previews/` predate the 0.7.0 rate changes.
 
 ## Demo video and screenshots
 
-`docs/media/hollow_saint_0.7.8_demo.mp4` (960 × 540, compressed for the repository) and the screenshots in
-`docs/media/` come from one command, from the 0.7.8 code:
-
-```sh
-KENNEL=.../hundekraft-3.0.3-source/ext/kennel python3 tools/make_tour.py --demo --stills docs/media
-ffmpeg -i build/tour/hollow_saint_0.7.8_demo.mp4 -vf scale=960:-2 -c:v libx264 -preset slow -crf 30 \
-       -c:a aac -b:a 128k -movflags +faststart docs/media/hollow_saint_0.7.8_demo.mp4
-```
-
-The full-size 1280 × 720 video lands in `build/tour/`. `python3 tools/make_tour.py` alone makes the original tour (every
-control swept, then the 8 presets) and `--features` the 0.7.0 features. Audio and screen come from the plugin's own C
-code on a PC, driven by one script; none of it is a recording of an OP-1.
+`docs/media/hollow_saint_0.7.8_demo.mp4` and the screenshots in `docs/media/` come from the 0.7.8 code: audio and screen
+from the plugin's own C code on a PC, driven by one script; none of it is a recording of an OP-1. How to make them:
+[docs/BUILDING.md](docs/BUILDING.md#demo-video-and-screenshots).
 
 ## Licence and credits
 
