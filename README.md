@@ -7,6 +7,13 @@ darkens, rings and tolls a distant bell. Two performance transformations: **Lo-F
 in a forgotten room) and **Crank & Tremor** (the wheel's strokes pulse the level and the string's tone). Pure synthesis,
 no samples. Version **0.7.8**.
 
+<p align="center"><img src="docs/media/screen.gif" alt="The Hollow Saint screen: the hurdy-gurdy's wheel turning on the wheel strokes, strings shimmering" width="490"></p>
+
+**Demo video (4 min, with sound): [docs/media/hollow_saint_0.7.8_demo.mp4](docs/media/hollow_saint_0.7.8_demo.mp4)**: the
+default sound, every encoder turned and pushed, the Lo-Fi Relic, Crank & Tremor, then the 8 presets. Rendered on a PC by
+the plugin's own C code (audio and screen), not recorded on an OP-1. Screenshots and what each encoder does:
+[The encoders](#the-encoders).
+
 **Install file: `release/hollow_saint.knl`** (43,256 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
 folder `release/presets/`.
 
@@ -58,6 +65,7 @@ tools/compare_knl.py          header and metadata of .knl files side by side
 toolchain/                    build_toolchain.sh (bfin-elf from git sources), MPC/MPFR shim, timestamp fix
 release/                      hollow_saint.knl (+ sha256) and the presets folder, ready to install
 results/                      test results, preset audio previews, screen preview
+docs/media/                   README screenshots, screen GIF and the demo video (tools/make_tour.py --stills)
 ```
 
 ## Build the `.knl`
@@ -97,14 +105,75 @@ anything the core does not export.
 If the OP-1 does not start after adding a plugin: power-cycle it; it starts once without plugin files, then remove
 the plugin in the Workshop.
 
-## The controls
+## The encoders
 
-| Knob | Turn | Push (page 2) |
+The four OP-1 encoders each play one part of the instrument. **Turn** an encoder to set its sound; **push** it to open
+its page 2, where turning it sets something else (and the screen shows it). Push again to go back. Every
+setting except the relic's on/off is saved with the patch.
+
+| Encoder | Turn | Push (page 2) |
 |---|---|---|
-| **Blue: DRONE** | off at 0, then subtle and dark, rich and resonant (middle), dense with a sub-octave (high) | the drone's **key**: FOLLOW (the lowest held note) or a fixed key C … B |
-| **Green: STRINGS** | soft, hollow, almost flute-like; nasal hurdy-gurdy (middle); bright and cutting | **Lo-Fi Relic** on while page 2 is open; turning green then sets the relic's **age** (STRINGS stays where it was). Push again: off |
-| **White: WHEEL BUZZ** | smooth; breathing swells (low), steady mechanical tremolo and buzz on the strokes (middle); aggressive rattle and deep pulse (high) | the **stroke rate**: steady, 1 bar, 1/2, 1/4, 1/8, 1/8 triplet, 1/16 of the OP-1 tempo (default: steady, since 0.7.7) |
-| **Red: CATHEDRAL** | dry and close; hollow, resonant, old-world (middle); dark, expansive, with a distant bell on each note (high) | none |
+| 🔵 **Blue: DRONE** | the drone strings' level and colour: off at 0, then subtle and dark, rich and resonant (middle), dense with a sub-octave (high) | the drone's **key**: FOLLOW (the lowest held note) or a fixed key C … B |
+| 🟢 **Green: STRINGS** | the melody string's tone: soft, hollow, almost flute-like; nasal hurdy-gurdy (middle); bright and cutting | **Lo-Fi Relic** on; turning green then sets the relic's **age** (STRINGS stays where it was). Push again: off |
+| ⚪ **White: WHEEL BUZZ** | the trompette's buzz and the wheel's pulse: smooth; breathing swells (low); steady mechanical tremolo and buzz on the strokes (middle); aggressive rattle and deep pulse (high) | the **stroke rate**: steady, 1 bar, 1/2, 1/4, 1/8, 1/8 triplet, 1/16 of the OP-1 tempo (default: steady) |
+| 🔴 **Red: CATHEDRAL** | the room: dry and close; hollow, resonant, old-world (middle); dark, expansive, with a distant bell on each note (high) | none |
+
+The screenshots below are from the demo video: the plugin's own screen code, drawn by the stand-in rasteriser
+(`tools/render_screen.py`), not photographed on an OP-1.
+
+<img src="docs/media/screen_default.png" alt="The default screen" width="490">
+
+**The default screen.** A hurdy-gurdy inside a gothic arch. The four meters along the bottom are the four encoders, in
+their colours. The wheel and crank turn while notes sound, each held note lights its key, the strings shimmer with
+their levels, and the rose window fills as CATHEDRAL goes up.
+
+### 🔵 Blue: DRONE
+
+Turn: how much drone sounds under the melody, the way the bourdon strings of a hurdy-gurdy hum underneath. At 0 there
+is none. Low, it is a quiet, dark root and fifth; in the middle it is rich and resonant;
+high, a sub-octave joins and it gets dense. Only one drone sounds at a time, owned by the lowest held note, so a chord
+gets one drone, not six.
+
+Push: choose the drone's **key**. FOLLOW (the default) makes the drone follow the lowest note you hold; C … B holds the
+drone on that key whatever you play, like real bourdons tuned to the piece. Page 2 shows a one-octave keyboard with the
+chosen key lit (or the FOLLOW arrow).
+
+<img src="docs/media/screen_drone_key.png" alt="Blue page 2: the drone key keyboard" width="490">
+
+### 🟢 Green: STRINGS
+
+Turn: the melody string's tone. Low, a soft, hollow, almost flute-like sound; in the middle, the nasal, reedy sound of a
+hurdy-gurdy; high, bright and cutting.
+
+Push: the **Lo-Fi Relic**, an old tape in a forgotten room: wow and flutter on the pitch, warm saturation, a lower
+sample rate and fewer bits, dust pops, a darker tape head, hiss and a transport that sags now and then. While it is on,
+turning green sets the tape's **age** (25 % on a fresh load) instead of STRINGS; it stays about as loud as the clean
+sound, just older. Push again to turn it off; switching cross-fades, so it does not click. The green meter becomes a
+worn cassette whose reels turn with the tape's wobble, and dust drifts in the cathedral.
+
+<img src="docs/media/screen_relic.png" alt="The Lo-Fi Relic on: the green meter is a cassette with an age readout" width="490">
+
+### ⚪ White: WHEEL BUZZ
+
+Turn: the trompette, the hurdy-gurdy's buzzing string, and how much the wheel's strokes move the sound (Crank &
+Tremor). Low, it is smooth, with slow breathing swells on the strokes; in the middle, a steady mechanical tremolo with
+the bridge buzzing on each stroke; high, an aggressive rattle with a deep pulse. At 0 there is no buzz and no pulse.
+
+Push: the **stroke rate**, locked to the OP-1's tempo: steady (no strokes: the sound stands still), 1 bar, 1/2, 1/4,
+1/8, 1/8 triplet, 1/16. A fresh load starts at steady, so the wheel only pulses once you choose a rate; presets set
+their own. Page 2 shows the beat cut into the chosen rate.
+
+<img src="docs/media/screen_stroke_rate.png" alt="White page 2: the stroke-rate display" width="490">
+<img src="docs/media/screen_crank.png" alt="Crank and Tremor at 1/8: the wheel surging on the strokes" width="490">
+
+### 🔴 Red: CATHEDRAL
+
+Turn: the space around the instrument. Low, dry and close; in the middle, hollow and resonant, an old stone room; high,
+dark and huge, with a faint church bell struck on each note. Releasing a key lifts the bow and the room rings on through
+the T2 release, so use a long release to hear it. The rose window's eight petals fill with CATHEDRAL, and the saint's
+halo flares and the bell swings at each bell strike. Red has no page 2.
+
+<img src="docs/media/screen_cathedral.png" alt="CATHEDRAL high: the rose window full and the bell swinging" width="490">
 
 How the sound is made, briefly:
 
@@ -136,7 +205,7 @@ owner changes. For a free-standing drone note, set DRONE to 0, hold a low note a
 
 ## The screen
 
-A hurdy-gurdy in line art inside a gothic arch, in the OP-1's colours. The wheel and crank turn while notes sound
+A hurdy-gurdy in line art inside a gothic arch, in the OP-1's colours (screenshots: [The encoders](#the-encoders)). The wheel and crank turn while notes sound
 and surge on the wheel strokes; the drone strings (blue), melody strings (green) and trompette (white) shimmer with
 their levels; the buzzing bridge rattles; each held note lights its key; the rose window's eight petals fill with
 CATHEDRAL; the saint's halo widens and flares and the bell swings at each bell strike. Four meters show the knobs.
@@ -229,11 +298,20 @@ mechanical) and 90 % (1/16, aggressive), at 100 BPM. `results/screen_relic.png`:
 1-bar rate. All made on a PC by the plugin's own C code (tests/perform.c), not recorded on an OP-1; the 0.6 preset
 previews in `results/preset_previews/` predate the 0.7.0 rate changes.
 
-## Tour video
+## Demo video and screenshots
 
-`build/tour/hollow_saint_tour.mp4` (made by `python3 tools/make_tour.py`): every control swept, both page-2 controls,
-then the 8 presets. Audio and screen come from the plugin's own C code on a PC, driven by one script; it is not a
-recording of an OP-1.
+`docs/media/hollow_saint_0.7.8_demo.mp4` (960 × 540, compressed for the repository) and the screenshots in
+`docs/media/` come from one command, from the 0.7.8 code:
+
+```sh
+KENNEL=.../hundekraft-3.0.3-source/ext/kennel python3 tools/make_tour.py --demo --stills docs/media
+ffmpeg -i build/tour/hollow_saint_0.7.8_demo.mp4 -vf scale=960:-2 -c:v libx264 -preset slow -crf 30 \
+       -c:a aac -b:a 128k -movflags +faststart docs/media/hollow_saint_0.7.8_demo.mp4
+```
+
+The full-size 1280 × 720 video lands in `build/tour/`. `python3 tools/make_tour.py` alone makes the original tour (every
+control swept, then the 8 presets) and `--features` the 0.7.0 features. Audio and screen come from the plugin's own C
+code on a PC, driven by one script; none of it is a recording of an OP-1.
 
 ## Licence and credits
 
