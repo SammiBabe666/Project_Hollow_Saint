@@ -12,8 +12,9 @@ untested.
 
 1. The OP-1 runs Opus 2 with core 2.6 or later (the Opus site's patcher).
 2. Opus's menu (hold synth + drum + tape + mixer), T1, switch **developer mode** on for the first tries.
-3. Disk mode (shift + COM, then T3). Copy `release/opus/hollow_saint.opmod` into the disk's **mods** folder. For the
-   presets, copy `release/presets/synth/hollow saint` into the disk's **synth** folder. Eject, switch off and on.
+3. Disk mode (shift + COM, then T3). From the [download zip](../../README.md#download), copy `mods/hollow_saint.opmod`
+   into the disk's **mods** folder. For the presets, copy the folder `synth/hollow saint` into the disk's **synth**
+   folder. Eject, switch off and on.
 4. The menu, T2 (the mods list): the **hollow saint** row should say "loaded".
 5. **synth**, **shift + T1**, choose **hollow saint**.
 

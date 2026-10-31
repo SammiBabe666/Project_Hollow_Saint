@@ -1,7 +1,8 @@
 # Releases
 
 Built plugin files and release notes for each published version. `release/` at the top level holds the build that
-`tools/release.sh` produces from the current source; this folder keeps the earlier and published ones.
+`tools/release.sh` produces from the current source, and its download zip (`release/hollow_saint-0.7.8.zip`); this folder
+keeps the earlier and published ones.
 
 | Version | Files | Notes |
 |---|---|---|
