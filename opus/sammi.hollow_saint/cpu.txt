@@ -1,0 +1,5 @@
+# Not a device measurement yet. Estimate: this build's worst voice block in the Blackfin simulator (28,490 cycles: all
+# knobs at maximum, the relic on at its oldest; tests/bfin_sim/run_opus.sh) x 6 voices = 170,940, plus about a third
+# for the SDRAM cache misses the simulator does not model. Replace it with "audio: worst N" from the mods list
+# (developer mode, six-note chords at the heaviest settings) before sharing the plugin.
+cycles 230000

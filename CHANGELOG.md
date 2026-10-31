@@ -11,6 +11,17 @@ Each version is a git tag in this repository. Every step was host-tested; none h
 - White page 2 starts at steady on a fresh load (manifest default 0, was 1/8). Presets set their own rate.
 - Audio unchanged from 0.7.0.
 
+## 0.7.8 Opus 2 port
+- `opus/sammi.hollow_saint`: the engine as an Opus 2 plugin (`.opmod`, core 2.6). It wraps `hollow_saint.c` unchanged
+  through a kennel-API header (`op1_plugin.h` in that folder). It uses OS voices, the "hollow saint" type (so the kennel
+  presets load) and its own OS screen. The encoder pushes (page 2) are now handled by the engine's own key and turn
+  handlers. A new sound's wheel starts at steady, as in 0.7.7.
+- `tools/build_opmod.sh` and `tools/gen_opus_headers.py` (the SVG as a C string, the sine table computed).
+  `release/opus/hollow_saint.opmod`.
+- Tests: `tests/opus_host/run.sh` (the glue's checks; audio == the kennel build) and `tests/bfin_sim/run_opus.sh` (the
+  compiled `.opmod` code in the Blackfin simulator; audio == the kennel build).
+- Built from 0.7.8: the same screen art as the kennel build (`hs_svg.h` regenerated), version 0.7.8.
+
 ## 0.7.0 (Lo-Fi Relic, Crank & Tremor)
 - **Lo-Fi Relic** on the green press (page 2; green then sets its age, word 6): wow and flutter on every pitch (shared
   tape), cubic saturation, sample-rate and bit reduction with dither, dust, a two-pole tape-head low-pass, hiss and a

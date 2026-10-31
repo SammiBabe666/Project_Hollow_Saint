@@ -7,8 +7,13 @@ darkens, rings and tolls a distant bell. Two performance transformations: **Lo-F
 in a forgotten room) and **Crank & Tremor** (the wheel's strokes pulse the level and the string's tone). Pure synthesis,
 no samples. Version **0.7.8**.
 
-**Install file: `release/hollow_saint.knl`** (40,548 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
+**Install file: `release/hollow_saint.knl`** (43,256 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
 folder `release/presets/`.
+
+**Opus 2:** the same engine also builds as an [Opus 2](https://github.com/LizardMan245/opus) plugin,
+`release/opus/hollow_saint.opmod` (id `sammi.hollow_saint`, core 2.6 or later; the same presets). How to install it,
+its controls and what the port does: [opus/sammi.hollow_saint/README.md](opus/sammi.hollow_saint/README.md). Build it
+with `tools/build_opmod.sh`. The kennel build below is unchanged.
 
 ## Status: what has and has not been done
 
@@ -21,7 +26,8 @@ folder `release/presets/`.
 | **`.knl` package** built with the SDK's packer (`tools/kennel/pack.py`): SVG, relocation and import checks | **done**: one import, `_op1_eng_page`, exported by the 3.0.3 core |
 | **Loader**: the core's own loader code (`kn_load.c`) and the reference loader accept it and relocate it to identical images at two addresses; structure matches a known-good plugin (`erdtree.knl`) | **passes** |
 | **The compiled Blackfin code, run** in the Blackfin instruction-set simulator at the firmware's fixed addresses: audio bit-identical to the host-tested build (184,320 samples, Lo-Fi Relic included) | **passes** |
-| Loaded in the Workshop / OP1-Emulator | not done |
+| **Opus 2 `.opmod`** built with the Opus plugin kit (`plugin_tool.py build`: every warning an error, imports checked); its audio bit-identical to the kennel build on the PC (ASan + UBSan) and as compiled Blackfin code in the simulator (`results/opus_results.md`) | **passes** |
+| Loaded in the Workshop / OP1-Emulator / on Opus 2 | not done |
 | **Tested on OP-1 hardware** | **not done** |
 
 Nothing here claims more than the table says. The simulator runs the engine's code, not the OP-1's firmware, so the

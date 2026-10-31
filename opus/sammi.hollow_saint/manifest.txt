@@ -1,0 +1,16 @@
+# sammi.hollow_saint: Cathedral of the Hollow Saint, a haunted hurdy-gurdy synth engine (the kennel engine, ported).
+# blue DRONE (push: the drone key), green STRINGS (push: Lo-Fi Relic, then green sets its age), white WHEEL BUZZ
+# (push: the stroke rate), orange CATHEDRAL. core 2.6: OS voices, the kennel type and its own OS screen.
+opmod     1
+id        sammi.hollow_saint
+name      Hollow Saint
+author    sammi
+version   0.7.8
+core      2.6
+adds      engine hollow saint
+uses      blue_push synth t1 modal "drone key page"
+uses      green_push synth t1 modal "lo-fi relic on or off"
+uses      white_push synth t1 modal "stroke rate page"
+uses      blue_turn synth t1 modal "drone key (page 2)"
+uses      green_turn synth t1 modal "relic age (relic on)"
+uses      white_turn synth t1 modal "stroke rate (page 2)"
