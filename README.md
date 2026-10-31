@@ -5,7 +5,7 @@ A haunted hurdy-gurdy for the **original Teenage Engineering OP-1**: a kennel sy
 can hold a key like real bourdons, a buzzing bridge that kicks in on tempo-locked wheel strokes, and a cathedral that
 darkens, rings and tolls a distant bell. Two performance transformations: **Lo-Fi Relic** (press green: an old tape
 in a forgotten room) and **Crank & Tremor** (the wheel's strokes pulse the level and the string's tone). Pure synthesis,
-no samples. Version **0.7.0**.
+no samples. Version **0.7.8**.
 
 **Install file: `release/hollow_saint.knl`** (40,548 bytes, sha256 in `release/hollow_saint.knl.sha256`) and the presets
 folder `release/presets/`.
@@ -97,7 +97,7 @@ the plugin in the Workshop.
 |---|---|---|
 | **Blue: DRONE** | off at 0, then subtle and dark, rich and resonant (middle), dense with a sub-octave (high) | the drone's **key**: FOLLOW (the lowest held note) or a fixed key C … B |
 | **Green: STRINGS** | soft, hollow, almost flute-like; nasal hurdy-gurdy (middle); bright and cutting | **Lo-Fi Relic** on while page 2 is open; turning green then sets the relic's **age** (STRINGS stays where it was). Push again: off |
-| **White: WHEEL BUZZ** | smooth; breathing swells (low), steady mechanical tremolo and buzz on the strokes (middle); aggressive rattle and deep pulse (high) | the **stroke rate**: steady, 1 bar, 1/2, 1/4, 1/8 (default), 1/8 triplet, 1/16 of the OP-1 tempo |
+| **White: WHEEL BUZZ** | smooth; breathing swells (low), steady mechanical tremolo and buzz on the strokes (middle); aggressive rattle and deep pulse (high) | the **stroke rate**: steady, 1 bar, 1/2, 1/4, 1/8, 1/8 triplet, 1/16 of the OP-1 tempo (default: steady, since 0.7.7) |
 | **Red: CATHEDRAL** | dry and close; hollow, resonant, old-world (middle); dark, expansive, with a distant bell on each note (high) | none |
 
 How the sound is made, briefly:

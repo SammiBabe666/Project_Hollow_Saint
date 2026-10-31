@@ -2,6 +2,15 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## 0.7.8 (0.7.0 with 0.7.7's screen and default)
+- 0.7.7 was released as a .knl only (`releases/v0.7.7/`); its source was lost. Its disassembly shows its sound and screen
+  code were rewritten, so it can't be rebuilt from 0.7.0. 0.7.8 is 0.7.0 with the two changes 0.7.7's notes name:
+- Screen: 0.7.7's artwork, the whole drawing at 7/8 size and centred (`tools/gen_screen.py` maps it; the SVG is byte
+  for byte the one inside 0.7.7's .knl). `hollow_saint_geom.h` keeps the drawing's own units and adds the map
+  (`HS_S`, `HS_TX`, `HS_TY`); the screen code turns pivots and moves through it.
+- White page 2 starts at steady on a fresh load (manifest default 0, was 1/8). Presets set their own rate.
+- Audio unchanged from 0.7.0.
+
 ## 0.7.0 (Lo-Fi Relic, Crank & Tremor)
 - **Lo-Fi Relic** on the green press (page 2; green then sets its age, word 6): wow and flutter on every pitch (shared
   tape), cubic saturation, sample-rate and bit reduction with dither, dust, a two-pole tape-head low-pass, hiss and a

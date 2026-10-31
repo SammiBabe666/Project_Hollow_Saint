@@ -26,4 +26,7 @@ static const int16_t HS_REEL_X[2] = { 106, 120 };
 #define HS_AGE_X 130
 #define HS_AGE_LEN 14
 #define HS_RX0 176
+#define HS_S 896     /* the map to the screen: x * HS_S + HS_TX, y * HS_S + HS_TY, Q10 */
+#define HS_TX 20480
+#define HS_TY 384
 #endif

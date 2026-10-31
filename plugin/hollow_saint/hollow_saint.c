@@ -971,17 +971,21 @@ static void sc_move(void *n, int32_t tx, int32_t ty)                 /* Q10 */
     const int32_t m[9] = { ONE, 0, 0, 0, ONE, 0, tx, ty, ONE };
     op1_node_set_transform(n, m);
 }
-static void sc_scale(void *n, int32_t sx, int32_t sy, int32_t cx, int32_t cy)   /* about (cx, cy) in SVG units, Q10 */
+/* the drawing's original units (hollow_saint_geom.h) to the screen's, Q10: a point, and a displacement in Q10 */
+#define HS_PX(x) ((x) * HS_S + HS_TX)
+#define HS_PY(y) ((y) * HS_S + HS_TY)
+#define HS_D(d) (((d) * HS_S) >> 10)
+static void sc_scale(void *n, int32_t sx, int32_t sy, int32_t cx, int32_t cy)   /* about (cx, cy), all Q10 */
 {
     if (!n) return;
-    const int32_t m[9] = { sx, 0, 0, 0, sy, 0, cx * (ONE - sx), cy * (ONE - sy), ONE };
+    const int32_t m[9] = { sx, 0, 0, 0, sy, 0, (cx * (ONE - sx)) >> 10, (cy * (ONE - sy)) >> 10, ONE };
     op1_node_set_transform(n, m);
 }
-static void sc_rotate(void *n, int32_t ang, int32_t cx, int32_t cy)  /* ang: Q16 of a turn */
+static void sc_rotate(void *n, int32_t ang, int32_t cx, int32_t cy)  /* ang: Q16 of a turn; (cx, cy) Q10 */
 {
     if (!n) return;
     const uint32_t i = ((uint32_t)ang >> 3) & 8191;
-    op1_node_rotate(n, cx * ONE, cy * ONE, OP1_SINE_TABLE[i], OP1_SINE_TABLE[(i + 2048) & 8191]);
+    op1_node_rotate(n, cx, cy, OP1_SINE_TABLE[i], OP1_SINE_TABLE[(i + 2048) & 8191]);
 }
 static void sc_show(void *n, int on) { if (n) op1_node_set_visible(n, on); }
 
@@ -1051,8 +1055,8 @@ static void hs_screen_update(void *scr, int dt)
     const int32_t target = (sc_act * (1092 + ((((stroke * k[2]) >> 15) * 1500) >> 15))) >> 15;   /* Q16 turn / frame */
     sc_wvel += (target - sc_wvel) >> (target > sc_wvel ? 3 : 5);
     sc_wang += sc_wvel;
-    sc_rotate(n_wheel, sc_wang, HS_WHEEL_X, HS_WHEEL_Y);
-    sc_rotate(n_crank, sc_wang, HS_CRANK_X, HS_CRANK_Y);
+    sc_rotate(n_wheel, sc_wang, HS_PX(HS_WHEEL_X), HS_PY(HS_WHEEL_Y));
+    sc_rotate(n_crank, sc_wang, HS_PX(HS_CRANK_X), HS_PY(HS_CRANK_Y));
 
     /* strings: part their arcs (0.15 .. ~2.6 x 0.6 px), with a shimmer */
     const int32_t dog = on ? hs_dog : 0;
@@ -1062,16 +1066,16 @@ static void hs_screen_update(void *scr, int dt)
     amp[4] = ((sc_act * 300) >> 15) + ((dog * 2400) >> 15);
     for (int i = 0; i < 5; i++) {
         const int32_t sy = 154 + ((amp[i] * (24000 + (int32_t)(sc_rnd() >> 2))) >> 15);
-        sc_scale(n_s[i], ONE, sy, 0, HS_STRING_Y[i]);
+        sc_scale(n_s[i], ONE, sy, 0, HS_PY(HS_STRING_Y[i]));
     }
     /* the dog rattles: a random lift up to ~1.5 px with the buzz */
-    sc_move(n_dog, 0, -(int32_t)(((sc_rnd() * (uint32_t)dog) >> 15) * 1536 >> 15));
+    sc_move(n_dog, 0, -HS_D((int32_t)(((sc_rnd() * (uint32_t)dog) >> 15) * 1536 >> 15)));
 
     /* lit keys: one per held voice */
     for (int i = 0; i < 6; i++) {
         const int lit = V[i].held && v_inc[i];
         sc_show(n_kp[i], lit);
-        if (lit) sc_move(n_kp[i], HS_KEY_X[sc_key(v_inc[i])] * (ONE / 4), 0);
+        if (lit) sc_move(n_kp[i], HS_D(HS_KEY_X[sc_key(v_inc[i])] * (ONE / 4)), 0);
     }
 
     /* CATHEDRAL: petals, the halo, the bell */
@@ -1085,17 +1089,17 @@ static void hs_screen_update(void *scr, int dt)
     sc_bvel -= sc_bang >> 7;                                           /* a heavy pendulum (~1.2 s), slowly damped */
     sc_bvel -= sc_bvel >> 6;
     sc_bang = clampi(sc_bang + sc_bvel, -4600, 4600);                  /* at most ~25 degrees */
-    sc_rotate(n_bell, sc_bang, HS_BELL_X, HS_BELL_Y);
+    sc_rotate(n_bell, sc_bang, HS_PX(HS_BELL_X), HS_PY(HS_BELL_Y));
     sc_glow -= sc_glow >> 4;
     const int32_t hs = 870 + ((k[3] * 260) >> 15) + ((sc_glow * 120) >> 15);
-    sc_scale(n_halo, hs, hs, HS_HALO_X, HS_HALO_Y);
+    sc_scale(n_halo, hs, hs, HS_PX(HS_HALO_X), HS_PY(HS_HALO_Y));
 
     /* meters, and the page-2 icons in place of the blue and white meters */
     const int pg0 = op1_eng_page[0] != 0, pg1 = op1_eng_page[1] != 0, pg2 = op1_eng_page[2] != 0;
     for (int i = 0; i < 4; i++) {
         const int hide = (i == 0 && pg0) || (i == 1 && pg1) || (i == 2 && pg2);
         sc_show(n_m[i], !hide);
-        if (!hide) sc_scale(n_m[i], (k[i] * ONE) >> 15, ONE, HS_METER_X[i], HS_METER_Y);
+        if (!hide) sc_scale(n_m[i], (k[i] * ONE) >> 15, ONE, HS_PX(HS_METER_X[i]), HS_PY(HS_METER_Y));
     }
     sc_show(n_kbd, pg0); sc_show(n_kdot, pg0);
     if (pg0) {
@@ -1103,11 +1107,11 @@ static void hs_screen_update(void *scr, int dt)
         /* C .. B on the icon: naturals in the lower half, sharps on the dividing lines; FOLLOW above the arrow */
         static const int8_t KX[12] = { 0, 1, 1, 2, 2, 3, 4, 4, 5, 5, 6, 6 };
         static const uint8_t SHARP[12] = { 0, 1, 0, 1, 0, 0, 1, 0, 1, 0, 1, 0 };
-        if (!key) sc_move(n_kdot, (HS_KBD_X - 8) * ONE, (HS_KBD_Y - 3) * ONE);
+        if (!key) sc_move(n_kdot, HS_D((HS_KBD_X - 8) * ONE), HS_D((HS_KBD_Y - 3) * ONE));
         else {
             const int pc = key - 1;
             const int32_t x = HS_KBD_X * ONE + KX[pc] * HS_KBD_W * ONE + (SHARP[pc] ? 0 : HS_KBD_W * ONE / 2);
-            sc_move(n_kdot, x, (HS_KBD_Y + (SHARP[pc] ? 3 : 9)) * ONE);
+            sc_move(n_kdot, HS_D(x), HS_D((HS_KBD_Y + (SHARP[pc] ? 3 : 9)) * ONE));
         }
     }
     const int zone = stroke_zone(words);
@@ -1119,11 +1123,11 @@ static void hs_screen_update(void *scr, int dt)
     sc_show(n_rl[0], pg1); sc_show(n_rl[1], pg1);
     if (pg1) {
         sc_reel += (sc_act * (1400 + hs_relic_wob * 8)) >> 15;          /* Q16 turn per frame */
-        sc_rotate(n_rl[0], sc_reel, HS_REEL_X[0], HS_REEL_Y);
-        sc_rotate(n_rl[1], sc_reel + 21845, HS_REEL_X[1], HS_REEL_Y);
-        sc_scale(n_rage, (relic_age(words) * ONE) >> 15, ONE, HS_AGE_X, HS_METER_Y);
+        sc_rotate(n_rl[0], sc_reel, HS_PX(HS_REEL_X[0]), HS_PY(HS_REEL_Y));
+        sc_rotate(n_rl[1], sc_reel + 21845, HS_PX(HS_REEL_X[1]), HS_PY(HS_REEL_Y));
+        sc_scale(n_rage, (relic_age(words) * ONE) >> 15, ONE, HS_PX(HS_AGE_X), HS_PY(HS_METER_Y));
         if ((sc_rnd() & 7) == 0)                                       /* the dust shifts now and then */
-            sc_move(n_dust, ((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2), ((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2));
+            sc_move(n_dust, HS_D(((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2)), HS_D(((int32_t)(sc_rnd() & 3) - 1) * (ONE / 2)));
     }
 
     op1_screen_draw(scr, dt);
