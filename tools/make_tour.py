@@ -7,6 +7,9 @@ its audio and screen frames, with captions, muxed with ffmpeg.
                                                          (default build/tour/hollow_saint_0.7.0_features.mp4)
     python3 tools/make_tour.py --demo [out.mp4]          the engine and its knobs, then both of the above
                                                          (default build/tour/hollow_saint_<version>_demo.mp4)
+    python3 tools/make_tour.py --opus [out.mp4]          welcome to Opus: the Opus 2 build (tests/opus_host/
+                                                         opus_perform.c) and the 8 presets it loads; needs OPUS_KIT
+                                                         (default build/tour/hollow_saint_<version>_opus_welcome.mp4)
     --stills DIR (with any mode)                         also save screen stills and a short GIF of the screen at
                                                          the moments in STILLS (the README's docs/media/)
 
@@ -27,10 +30,16 @@ import render_screen as RS
 import presets as P
 
 KENNEL = os.environ.get('KENNEL', '/home/claude/ref/bundle/hundekraft-3.0.3-source/ext/kennel')
+OPUS_KIT = os.environ.get('OPUS_KIT', os.path.expanduser('~/ref/opus/plugin-kit'))   # github.com/LizardMan245/opus
 OUT_DIR = os.path.join(ROOT, 'build', 'tour')
 SVG = os.path.join(ROOT, 'plugin', 'hollow_saint', 'hollow_saint.svg')
 FPS = 30
 TAGLINE = 'a haunted hurdy-gurdy for the original OP-1'
+TITLE = 'CATHEDRAL OF THE HOLLOW SAINT'
+SUB = 'kennel synth plugin  hollow_saint  for the Hundekraft OP-1 Workshop 3.0.3'
+END_TITLE, END_TAG = None, None                       # the end card: the title card's unless set
+END_SUB = 'drone  strings  wheel buzz  cathedral  /  lo-fi relic  crank & tremor  /  8 presets  /  GPL-3.0-or-later'
+FOOT = 'host render of the hollow_saint engine and screen code (not recorded on an OP-1; OP-1 FX not simulated)'
 VW, VH = 1280, 720
 SC, SS = 3, 2                                       # screen at 3x (960 x 480), drawn at 2x supersampling
 SX, SY = (VW - 320 * SC) // 2, 34
@@ -165,7 +174,46 @@ def demo():
     return finish(S, presets_section(S, t))
 
 
-def presets_section(S, t):
+def opus_welcome():
+    """welcome to Opus: the same engine on Opus 2, its T1 pushes, then the 8 presets, as Opus loads them"""
+    S = start()
+    title(S)
+    tune, slow = TUNE, SLOW
+    S.at(10.0, 'caption', 'WELCOME TO OPUS  the same engine as the kennel .knl, unchanged: the same sound')
+    t = play(S, 10.2, tune)
+    t = play(S, t, tune)
+    S.at(t + 0.2, 'caption', 'the four knobs are the OS\'s: drone, strings, wheel buzz, cathedral')
+    S.at(t + 0.6, 'ramp', 0, 16384, 30000, 4.0)
+    S.at(t + 4.6, 'ramp', 3, 12000, 26000, 4.0)
+    t = play(S, t + 0.6, slow * 2)
+    S.at(t, 'knob', 0, 16384); S.at(t, 'knob', 3, 13107)
+    S.at(t + 0.1, 'caption', 'push BLUE on T1: the drone key page (modal: only on the engine\'s page)')
+    S.at(t + 0.1, 'page', 0, 1)
+    S.at(t + 1.4, 'word', 5, 8823)                       # one detent at a time would be C, C#, .. : here D
+    t = play(S, t + 0.3, [(69, .5), (67, .5), (65, .5), (64, .5), (65, .5), (62, .5), (60, .5), (62, 1.0)], hold_bass=False)
+    S.at(t, 'page', 0, 0); S.at(t, 'word', 5, 1260)
+    S.at(t + 0.2, 'caption', 'push GREEN: the Lo-Fi Relic, and green ages the tape while it is on')
+    S.at(t + 0.2, 'page', 1, 1)
+    t0 = t + 0.4
+    t = play(S, t0, tune)
+    steps = int((t - t0) / 0.25)
+    for j in range(steps + 1):
+        S.at(t0 + j * 0.25, 'word', 6, int(8192 + (26000 - 8192) * j / steps))
+    S.at(t + 0.1, 'page', 1, 0); S.at(t + 0.1, 'word', 6, 8192)
+    S.at(t + 0.2, 'caption', 'push WHITE: the stroke rate, in tempo with the OP-1\'s clock')
+    S.at(t + 0.2, 'page', 2, 1); S.at(t + 0.2, 'knob', 2, 19000)
+    S.note(t + 0.3, 50, 7.2, 110); S.note(t + 0.3, 62, 7.2, 105)
+    for j, r in enumerate(('1/4', '1/8', '1/8T', '1/16')):
+        S.at(t + 0.3 + j * 1.8, 'word', 7, P.rate_word(r))
+    t += 7.8
+    S.at(t, 'page', 2, 0); S.at(t, 'word', 7, P.rate_word('steady')); S.at(t, 'knob', 2, 14745)
+    S.at(t + 0.2, 'caption', 'THE PORTED PRESETS  the 8 kennel presets load on Opus as they are')
+    S.note(t + 0.4, 50, 3.4, 104); S.note(t + 0.4, 57, 3.4, 100)
+    t = presets_section(S, t + 4.4, label='PORTED PRESET {i}/8  {name}')
+    return finish(S, t)
+
+
+def presets_section(S, t, label='PRESET  {name}'):
     """the 8 presets, each with its own phrase; returns the end time"""
     phr = {
         'hollow saint':   [(62, .5), (64, .25), (65, .25), (67, .5), (65, .5), (64, .5), (62, 1.0)],
@@ -178,12 +226,12 @@ def presets_section(S, t):
         'drowned bell':   [(69, .5), (0, .5), (65, .5), (0, .5), (62, .5), (0, 1.0), (57, .5), (0, 1.5)],
     }
     bass = {'ash procession': 43, 'crypt drone': 48}
-    for p in P.PRESETS:
+    for i, p in enumerate(P.PRESETS, 1):
         name = p[0]
         S.at(t, 'alloff')
         S.preset(t + 0.05, p)
         kn, w = P.knob_words(p)
-        S.at(t + 0.05, 'caption', f'PRESET  {name}')
+        S.at(t + 0.05, 'caption', label.format(i=i, name=name))
         o = 12 * p[7]
         tt = t + 0.3
         dur = sum(d for _, d in phr[name])
@@ -361,8 +409,7 @@ def _frame(args):
     xs = [170, 470, 790, 1110]
     for j in range(4):
         vd.text((xs[j], 604), labels[j], font=f_k, fill=COLS[j], anchor='mm')
-    vd.text((VW // 2, 690), 'host render of the hollow_saint engine and screen code (not recorded on an OP-1; OP-1 FX not '
-            'simulated)', font=f_s, fill=(110, 110, 115), anchor='mm')
+    vd.text((VW // 2, 690), FOOT, font=f_s, fill=(110, 110, 115), anchor='mm')
     if title_alpha > 0 or cap == 'END':
         a = 1.0 if cap == 'END' else title_alpha
         ov = Image.new('RGB', (VW, VH), (0, 0, 0))
@@ -371,32 +418,44 @@ def _frame(args):
         c = tuple(int(255 * a) for _ in range(3))
         r = tuple(int(v * a) for v in COLS[3])
         g = tuple(int(150 * a) for _ in range(3))
-        vd.text((VW // 2, 300), 'CATHEDRAL OF THE HOLLOW SAINT', font=ImageFont.truetype(FONTB, 46), fill=c, anchor='mm')
-        vd.text((VW // 2, 360), TAGLINE, font=ImageFont.truetype(FONT, 24), fill=r, anchor='mm')
-        sub = ('kennel synth plugin  hollow_saint  for the Hundekraft OP-1 Workshop 3.0.3' if cap != 'END'
-               else 'drone  strings  wheel buzz  cathedral  /  lo-fi relic  crank & tremor  /  8 presets  /  '
-                    'GPL-3.0-or-later')
+        end = cap == 'END'
+        vd.text((VW // 2, 300), (END_TITLE if end and END_TITLE else TITLE), font=ImageFont.truetype(FONTB, 46), fill=c,
+                anchor='mm')
+        vd.text((VW // 2, 360), (END_TAG if end and END_TAG else TAGLINE), font=ImageFont.truetype(FONT, 24), fill=r,
+                anchor='mm')
+        sub = END_SUB if end else SUB
         vd.text((VW // 2, 410), sub, font=ImageFont.truetype(FONT, 18), fill=g, anchor='mm')
     V.save(out)
     return i
 
 
 def main():
-    global TAGLINE
+    global TAGLINE, TITLE, SUB, END_TITLE, END_TAG, END_SUB, FOOT
     args = sys.argv[1:]
     stills = None
     if '--stills' in args:
         j = args.index('--stills')
         stills = args[j + 1]
         del args[j:j + 2]
-    mode = next((a for a in args if a in ('--features', '--demo')), '')
-    args = [a for a in args if a not in ('--features', '--demo')]
+    mode = next((a for a in args if a in ('--features', '--demo', '--opus')), '')
+    args = [a for a in args if a not in ('--features', '--demo', '--opus')]
     perf, name = {'--features': (features, 'hollow_saint_0.7.0_features.mp4'),
-                  '--demo': (demo, f'hollow_saint_{VERSION}_demo.mp4')}.get(mode, (performance, 'hollow_saint_tour.mp4'))
+                  '--demo': (demo, f'hollow_saint_{VERSION}_demo.mp4'),
+                  '--opus': (opus_welcome, f'hollow_saint_{VERSION}_opus_welcome.mp4')}.get(
+                      mode, (performance, 'hollow_saint_tour.mp4'))
     if mode == '--features':
         TAGLINE = '0.7.0: lo-fi relic  /  crank & tremor  /  the presets'
     elif mode == '--demo':
         TAGLINE = f'{VERSION}: the engine  /  lo-fi relic  /  crank & tremor  /  the presets'
+    elif mode == '--opus':
+        TITLE = 'WELCOME TO OPUS, HOLLOW SAINT'
+        TAGLINE = 'the haunted hurdy-gurdy, now an Opus 2 plugin for the original OP-1'
+        SUB = f'sammi.hollow_saint  {VERSION}  /  .opmod for core 2.6 or later  /  checked against the beta 3.2 plugin kit'
+        END_TITLE = 'HOLLOW SAINT ON OPUS'
+        END_TAG = 'mods/hollow_saint.opmod into mods, the presets into synth/hollow saint'
+        END_SUB = 'drone  strings  wheel buzz  cathedral  /  lo-fi relic  crank & tremor  /  8 presets  /  GPL-3.0-or-later'
+        FOOT = ('host render of the Opus 2 build\'s engine and screen code on a PC (not recorded on an OP-1; OP-1 FX not '
+                'simulated)')
     mp4 = args[0] if args else os.path.join(OUT_DIR, name)
     os.makedirs(OUT_DIR, exist_ok=True)
     fdir = os.path.join(OUT_DIR, 'frames')
@@ -406,11 +465,16 @@ def main():
     script = os.path.join(OUT_DIR, 'tour.txt')
     open(script, 'w').write('\n'.join(perf()) + '\n')
     exe = os.path.join(OUT_DIR, 'perform')
-    sdk = os.path.join(KENNEL, 'synth_sdk')
-    subprocess.run(['cc', '-O2', '-DOP1_HOST', '-DENGINE=ENGINE_hollow_saint', '-DSCREEN=SCREEN_hollow_saint',
-                    '-I', os.path.join(ROOT, 'tests', 'host_sdk'), '-I', sdk, '-I', os.path.join(ROOT, 'plugin', 'hollow_saint'),
-                    os.path.join(ROOT, 'tests', 'perform.c'), os.path.join(ROOT, 'plugin', 'hollow_saint', 'hollow_saint.c'),
-                    '-lm', '-o', exe], check=True)
+    if mode == '--opus':                             # the Opus 2 build, through its engine struct
+        subprocess.run(['cc', '-O2', '-DOP1_HOST', '-DOPUS_HOST', '-I', os.path.join(ROOT, 'opus', 'sammi.hollow_saint'),
+                        '-I', os.path.join(OPUS_KIT, 'sdk'), os.path.join(ROOT, 'tests', 'opus_host', 'opus_perform.c'),
+                        '-lm', '-o', exe], check=True)
+    else:
+        sdk = os.path.join(KENNEL, 'synth_sdk')
+        subprocess.run(['cc', '-O2', '-DOP1_HOST', '-DENGINE=ENGINE_hollow_saint', '-DSCREEN=SCREEN_hollow_saint',
+                        '-I', os.path.join(ROOT, 'tests', 'host_sdk'), '-I', sdk, '-I', os.path.join(ROOT, 'plugin', 'hollow_saint'),
+                        os.path.join(ROOT, 'tests', 'perform.c'), os.path.join(ROOT, 'plugin', 'hollow_saint', 'hollow_saint.c'),
+                        '-lm', '-o', exe], check=True)
     base = os.path.join(OUT_DIR, 'tour')
     subprocess.run([exe, script, base], check=True)
     frames = [json.loads(l) for l in open(base + '.jsonl')]
