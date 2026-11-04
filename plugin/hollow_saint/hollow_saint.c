@@ -150,6 +150,20 @@ static inline int32_t memo_lp_coef(int32_t hz, int32_t *m)
     if (m[0] != hz) { m[0] = hz; m[1] = lp_coef(hz); }
     return m[1];
 }
+/* the voice's bound into the output stage (+-65535, so the darkening filter's products fit int32), reached softly: up
+ * to KNEE the signal passes untouched, above it a parabola, y = KNEE + u - u^2 / 4R (u: the excess), bends it over to
+ * flat at KNEE + R = 65535 with no corner (the slope runs from 1 to 0), and anything beyond stays there. A hard clamp's
+ * corner is a crackle; this is a gentle saturation of the loudest peaks (the body's resonance at mid CATHEDRAL with a
+ * strong drone). No division: one compare per sample while below the knee */
+#define KNEE   57343
+#define KNEE_R 8192
+static inline int32_t soft_bound(int32_t x)
+{
+    if (__builtin_expect((uint32_t)(x + KNEE) <= 2u * KNEE, 1)) return x;
+    const int32_t u = clampi((x < 0 ? -x : x) - KNEE, 0, 2 * KNEE_R);     /* <= 16384: u^2 fits */
+    const int32_t y = KNEE + u - ((u * u) >> 15);
+    return x < 0 ? -y : y;
+}
 /* the room's saturation: two min/max instructions, no branch */
 static inline int16_t sat16(int32_t x) { return (int16_t)clampi(x, -32768, 32767); }
 
@@ -287,6 +301,7 @@ typedef struct {
     int32_t rdl;                 /* room damping low-pass */
     int32_t bodyp, roomp;        /* the last body / room samples (rate changes) */
     int32_t dark;                /* darkening low-pass */
+    int32_t cbfb, crfb;          /* the body and room feedbacks reached at the end of the previous block */
     uint32_t bph[4];             /* bell partial phases (11.025 kHz) */
     int32_t benv[4];             /* their envelopes, Q23 */
     int32_t up[3];               /* the interpolator's last three 22.05 kHz samples */
@@ -296,7 +311,7 @@ typedef struct {
     int32_t relp, relp2, rhold, rpop;   /* tape-head low-pass (two poles), the held sample, the current pop */
     uint32_t rph, rrng;          /* sample-rate phase, its own noise */
     uint8_t cat_on, bell_pending;
-    uint8_t held, fresh;
+    uint8_t held, fresh, retrig;   /* retrig: the last note_on came while the voice still sounded */
 } voice_t;
 
 static voice_t V[NV];
@@ -526,10 +541,19 @@ static void take_drone(int to)
     if (from < 0 || from == to) return;
     voice_t *a = &V[from], *b = &V[to];
     const int ahead = v_blk[from] == blk;                  /* the old owner has rendered this block already */
-    for (int j = 0; j < 3; j++) b->dph[j] = a->dph[j] - (ahead ? a->dinc[j] * HB : 0u);
-    b->dlp = a->dlp; b->dbp = a->dbp;
-    b->tph = a->tph - (ahead ? a->tinc * HB : 0u);
-    b->slap = a->slap; b->rattle = a->rattle; b->rlp = a->rlp; b->rbp = a->rbp; b->tlp = a->tlp; b->amp = a->amp;
+    /* a new owner whose own drone (or trompette) is still sounding, fading out from an ownership it just lost, keeps
+     * it: overwriting a running oscillator and filter mid-sound is a click. It is sounding when it rendered the last
+     * block (this is its render, so v_blk still holds its previous one) with its drone's fade above zero; its drone
+     * and trompette ran there when their increments are set (they are cleared in a block they do not run) */
+    const int sounding = v_blk[to] + 1 == blk && b->dgain;
+    if (!(sounding && b->dinc[0])) {
+        for (int j = 0; j < 3; j++) b->dph[j] = a->dph[j] - (ahead ? a->dinc[j] * HB : 0u);
+        b->dlp = a->dlp; b->dbp = a->dbp;
+    }
+    if (!(sounding && b->tinc)) {
+        b->tph = a->tph - (ahead ? a->tinc * HB : 0u);
+        b->slap = a->slap; b->rattle = a->rattle; b->rlp = a->rlp; b->rbp = a->rbp; b->tlp = a->tlp; b->amp = a->amp;
+    }
 }
 
 static void hs_note_on(void *self, const int16_t *k)
@@ -539,11 +563,23 @@ static void hs_note_on(void *self, const int16_t *k)
     voice_t *v = &V[vi];
     /* OP1_PITCH_INC is not this voice's pitch yet (the firmware writes it before render): nothing here reads it */
     v->rng = 0x9E3779B9u ^ ((uint32_t)vi * 0x85EBCA6Bu) ^ (v->rng << 7);   /* varies from note to note */
-    v->ph = lcg(&v->rng) & 0x3FFFFFFFu;     /* random start in the first quarter: no two voices line up */
-    v->drift = v->drift_t = ((int32_t)(lcg(&v->rng) >> 24) - 128) >> 1;   /* +-64 = +-3.4 cents from the start */
-    v->tone = v->flp = v->fbp = 0;
-    v->dc8 = 0;
-    for (int i = 0; i < 4; i++) v->ks[i] = knob(k, i);
+    /* Re-triggered while it still sounds (it rendered in the last block: a stolen voice, unison's re-trigger of all
+     * its voices, a repeated note): the firmware's envelope goes on from where it is, so the waveform must too. The
+     * string keeps its phase, its filters and its gains, which glide to the new note's across the first block; only
+     * a voice that was silent starts afresh */
+    const int sounding = blk && v_blk[vi] == blk;
+    v->retrig = (uint8_t)sounding;
+    if (!sounding) {
+        v->ph = lcg(&v->rng) & 0x3FFFFFFFu; /* random start in the first quarter: no two voices line up */
+        v->drift = v->drift_t = ((int32_t)(lcg(&v->rng) >> 24) - 128) >> 1;   /* +-64 = +-3.4 cents from the start */
+        v->tone = v->flp = v->fbp = 0;
+        v->dc8 = 0;
+        for (int i = 0; i < 4; i++) v->ks[i] = knob(k, i);
+        v->mjit = 32767;
+        v->fresh = 1;
+    } else {
+        lcg(&v->rng); lcg(&v->rng);         /* the same draws as a fresh note, so the noise is no different */
+    }
     v_inc[vi] = 0;                          /* its pitch is unknown until it renders */
     if (owner < 0) {                        /* the first note ever: a fresh drone */
         v->dph[0] = 0; v->dph[1] = 0x55555555u; v->dph[2] = 0;
@@ -551,11 +587,9 @@ static void hs_note_on(void *self, const int16_t *k)
         v->tph = 0; v->slap = v->rattle = v->rlp = v->rbp = v->tlp = v->amp = 0;
     }
     /* the owner keeps its drone state when it is re-triggered (a stolen or repeated note): no restart */
-    v->mjit = 32767;
     v->bowg = 32767;
     v->bell_pending = 1;                    /* struck at the first render (the velocity and pitch are known there) */
     v->held = 1;
-    v->fresh = 1;
 }
 
 static void hs_note_off(void *self)
@@ -759,10 +793,18 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
         v->bell_pending = 0;
         const int32_t bl = (tab5(T_CBELL, c) * vel) >> 15;
         if (bl) { hs_bell_lvl = bl; hs_bell_n++; }
-        for (int j = 0; j < 4; j++) { v->bph[j] = 0; v->benv[j] = bl ? ((bl * BELL_W[j]) >> 15) << 8 : 0; }
+        /* re-triggered while it sounds: a partial still ringing keeps its phase and rings on, a strike only raises it */
+        for (int j = 0; j < 4; j++) {
+            const int32_t e = bl ? ((bl * BELL_W[j]) >> 15) << 8 : 0;
+            if (!v->retrig || !v->benv[j]) { v->bph[j] = 0; v->benv[j] = e; }
+            else if (e > v->benv[j]) v->benv[j] = e;
+        }
     }
     const int bells = (v->benv[0] | v->benv[1] | v->benv[2] | v->benv[3]) != 0;
     if ((g0[G_WET] | t[G_WET]) || bells) {
+        /* the feedbacks glide sample by sample from the last block's to this block's: a step in a comb's feedback is
+         * a step in its output (the change x the delayed sample), which turning CATHEDRAL repeats every block */
+        const int32_t bfb = tab5(T_CBFB, c), rfb = tab5(T_CRFB, c);       /* <= 22938, <= 26870 */
         if (!v->cat_on) {                                                  /* off since: clear, no stale tail */
             for (int i = 0; i < CB1; i++) v->cb1[i] = 0;
             for (int i = 0; i < CB2; i++) v->cb2[i] = 0;
@@ -770,11 +812,14 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
             for (int i = 0; i < CA2; i++) v->ca2[i] = 0;
             for (int i = 0; i < CR; i++) v->cr[i] = 0;
             v->rdl = v->bodyp = v->roomp = 0;
+            v->cbfb = bfb; v->crfb = rfb;                                  /* empty lines: nothing to glide from */
             v->cat_on = 1;
         }
         /* body combs on an eighth of the voice: |x| <= 8191, feedback <= 0.7, so |y| <= 27304 (int16, no saturation) */
         {
-            const int32_t bfb = tab5(T_CBFB, c);                           /* <= 22938 */
+            int32_t fb6 = v->cbfb << 6;                                    /* Q6: 64 steps reach bfb exactly */
+            const int32_t dfb = bfb - v->cbfb;
+            v->cbfb = bfb;
             int16_t *p1 = v->cb1 + v->ib1, *p2 = v->cb2 + v->ib2;
             int16_t *const e1 = v->cb1 + CB1, *const e2 = v->cb2 + CB2;
             /* in runs that end where a line wraps (at most three per block), so the sample loop has no wrap test */
@@ -784,8 +829,9 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 if (e2 - p2 < n) n = e2 - p2;
                 for (const int end = m + n; m < end; m++) {
                     const int32_t x = hb[m] >> 3;
-                    const int32_t y1 = x + (m16(bfb, *p1) >> 15);
-                    const int32_t y2 = x - (m16(bfb, *p2) >> 15);          /* inverted: odd resonances, hollow */
+                    const int32_t fb = (fb6 += dfb) >> 6;                  /* between the two feedbacks: int16 */
+                    const int32_t y1 = x + (m16(fb, *p1) >> 15);
+                    const int32_t y2 = x - (m16(fb, *p2) >> 15);           /* inverted: odd resonances, hollow */
                     *p1++ = (int16_t)y1;
                     *p2++ = (int16_t)y2;
                     bodyb[m] = (y1 + y2) >> 1;
@@ -821,7 +867,9 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 }
                 bl = bellw;
             }
-            const int32_t rfb = tab5(T_CRFB, c);
+            int32_t rfb5 = v->crfb << 5;                                   /* Q5: 32 steps reach rfb exactly */
+            const int32_t drfb = rfb - v->crfb;
+            v->crfb = rfb;
             const int32_t rdamp = memo_lp_coef(tab5(T_CDAMP, c) * 2, v->memo[M_DAMP]);   /* the coefficient at 11.025 kHz */
             int16_t *pa1 = v->ca1 + v->ia1, *pa2 = v->ca2 + v->ia2, *pr = v->cr + v->ir;
             int16_t *const ea1 = v->ca1 + CA1, *const ea2 = v->ca2 + CA2, *const er = v->cr + CR;
@@ -844,7 +892,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                     *pa2++ = sat16(w);
                     const int32_t r = *pr;
                     rdl += (((r - rdl) >> 1) * rdamp) >> 14;
-                    *pr++ = sat16(z + ((rfb * rdl) >> 15));
+                    *pr++ = sat16(z + ((((rfb5 += drfb) >> 5) * rdl) >> 15));
                     roomb[q] = r;
                 }
                 if (pa1 == ea1) pa1 = v->ca1;
@@ -898,7 +946,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
             int32_t *h = hb + (sb - 1) * 8;
             if (kd) {
                 for (int n = 0; n < 8; n++) {
-                    int32_t y = clampi(h[n], -65535, 65535);
+                    int32_t y = soft_bound(h[n]);
                     dark += (((y - dark) >> 1) * dcoef) >> 14; y = dark;
                     dc8 += (y * 256 - dc8) >> 8;
                     y -= dc8 >> 8;
@@ -906,7 +954,7 @@ static void hs_render(void *self, int16_t *out, const int16_t *k)
                 }
             } else {
                 for (int n = 0; n < 8; n++) {
-                    int32_t y = clampi(h[n], -65535, 65535);
+                    int32_t y = soft_bound(h[n]);
                     dark = y;
                     dc8 += (y * 256 - dc8) >> 8;
                     y -= dc8 >> 8;

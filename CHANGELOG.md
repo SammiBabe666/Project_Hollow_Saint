@@ -2,6 +2,26 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## Unreleased: declicking (poly, unison, CATHEDRAL)
+- **Re-triggered voices no longer click.** A note_on on a voice that is still sounding (a stolen voice in poly, unison
+  re-triggering all six voices on every note, a repeated note) used to restart the string at a random phase with its
+  filters zeroed and its gains snapped, while the OP-1's envelope carried on from where it was. Such a voice now keeps
+  its phase, filters and smoothed knobs, and its gains glide to the new note's across the first block. A ringing bell
+  keeps its phase and rings on. Voices that were silent start exactly as before.
+- **Drone hand-over:** a new owner whose own drone was still fading out (it lost the drone moments ago) keeps its
+  running oscillators instead of having them overwritten mid-sound.
+- **CATHEDRAL:** the body and room comb feedbacks glide sample by sample between blocks instead of stepping once per
+  block while the knob turns. The output stage's hard clamp at +-65535, which the body's resonance reached at mid
+  CATHEDRAL with a strong drone (up to ~40 clipped samples a second), is now a soft knee: untouched up to 57343, a
+  parabola to flat at 65535, no corner.
+- Unchanged sound otherwise: host suite renders run one scenario at a time are byte-identical to 0.7.8 for every
+  scenario without a re-trigger, a CATHEDRAL sweep or the knee (phrase, single, chord6, sweep1, sweep2, tail, the relic
+  and tremor scenarios); where the knee engages the largest difference is 176 LSB on a few hundred samples.
+- Tests: `tests/declick.c` (poly / unison / mono voice modes, encoder-stepped knob turns, a sample-accurate click
+  detector): 22 clicks before, 0 after, on the soft-sound runs. `tests/host_shim/op1_plugin.h`: a stand-in for the kennel
+  SDK header so the host suite and declick build without the hundekraft bundle.
+- Not yet run on an OP-1, and not yet measured for CPU on the device.
+
 ## 0.7.8 download zip
 - `release/hollow_saint-0.7.8.zip`: the prebuilt `hollow_saint.knl`, `mods/hollow_saint.opmod`, the presets as
   `synth/hollow saint/`, `INSTALL.txt` and `SHA256SUMS.txt`. Nothing to build to install it. Made by `tools/make_zip.py`
