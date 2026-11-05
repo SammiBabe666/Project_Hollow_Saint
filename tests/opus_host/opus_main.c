@@ -28,6 +28,21 @@ int opus_engine_knobs(short par[8]) { memcpy(par, sound, sizeof sound); return 1
 int opus_engine_live(short par[8]) { memcpy(par, sound, sizeof sound); return 1; }
 int opus_engine_knob_set(int k, int value)
 { if (k == 4 || k < 0 || k > 7) return 0; sound[k] = (short)(value < 0 ? 0 : value > 32767 ? 32767 : value); return 1; }
+static unsigned char audio_pool[1 << 15] __attribute__((aligned(32))), fast_pool[1024] __attribute__((aligned(32)));
+static unsigned audio_used, fast_used;
+static int pools_off;                                  /* 1: both return 0 (the engine's static memory serves) */
+void *opus_alloc_audio(struct opl_self *self, unsigned bytes)
+{
+    (void)self; bytes = (bytes + 31) & ~31u;
+    if (pools_off || audio_used + bytes > sizeof audio_pool) return 0;
+    void *p = audio_pool + audio_used; audio_used += bytes; memset(p, 0, bytes); return p;
+}
+void *opus_fast(struct opl_self *self, unsigned bytes)
+{
+    (void)self; bytes = (bytes + 31) & ~31u;
+    if (pools_off || fast_used + bytes > sizeof fast_pool) return 0;
+    void *p = fast_pool + fast_used; fast_used += bytes; memset(p, 0xA5, bytes); return p;   /* not cleared */
+}
 void opus_log(struct opl_self *self, const char *text) { (void)self; fprintf(stderr, "log: %s\n", text); }
 void opus_page_text(struct opl_self *self, int slot, int x, int y, int size, int colour, const char *text)
 { (void)self; (void)slot; (void)x; (void)y; (void)size; (void)colour; (void)text; }
@@ -85,6 +100,10 @@ static int checks(void)
     check(art_written == (int)sizeof HS_SVG - 1 && art_written > 10000, "the svg written whole");
     check(added->knobs[7] == 0 && stroke_zone(added->knobs) == 0, "a new sound's wheel: steady");
     check(added->knobs[0] == 16384 && added->knobs[3] == 12000, "a new sound's knobs: kennel's defaults");
+    check((unsigned char *)V >= audio_pool && (unsigned char *)V < audio_pool + sizeof audio_pool,
+          "the voices in the audio pool");
+    check((unsigned char *)hb >= fast_pool && (unsigned char *)bellw < fast_pool + sizeof fast_pool,
+          "the render's scratch in fast memory");
 
     memcpy(sound, added->knobs, sizeof sound);
     check(added->turn(0, 1, 0) == 0, "blue turn, page 2 closed: the OS's");

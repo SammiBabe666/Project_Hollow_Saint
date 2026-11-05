@@ -10,7 +10,7 @@ untested.
 
 ## Install
 
-1. The OP-1 runs Opus 2 with core 2.6 or later (the Opus site's patcher).
+1. The OP-1 runs Opus 2 with core 2.8 or later (the Opus site's patcher; the 3.2 beta's core is 2.13).
 2. Opus's menu (hold synth + drum + tape + mixer), T1, switch **developer mode** on for the first tries.
 3. Disk mode (shift + COM, then T3). From the [download zip](../../README.md#download), copy `mods/hollow_saint.opmod`
    into the disk's **mods** folder. For the presets, copy the folder `synth/hollow saint` into the disk's **synth**
@@ -40,6 +40,10 @@ A new sound starts at FOLLOW, age 8192 and a steady wheel (0.7.7's default).
 
 - **Voices**: `OPUS_ENGINE_OS_VOICES` (core 2.6). The voices are iter's own objects, as on kennel, so the engine finds
   its voice index and velocity from the object's address. Its state stays in `hollow_saint.c`'s static arrays.
+- **Memory**: the voices' state (~13 KB) comes from `opus_alloc_audio` (the audio pool, which the display does not
+  share) and the render's scratch (768 bytes) from `opus_fast` (L1), both in `opl_init`; without them the engine's
+  static memory serves. The audio reads no tables per sample (the sine is computed): ordinary memory costs ~107 cycles
+  a 32-byte line a block on the OP-1.
 - **Pitch**: the render's `pitch` argument stands in for kennel's `OP1_PITCH_INC`.
 - **Sine table**: `hs_sine.h` is computed (`round(32767 sin)`) by `tools/gen_opus_headers.py`. It has the same values
   as the firmware's table, so nothing is read from the firmware for it.

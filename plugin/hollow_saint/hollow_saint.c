@@ -79,7 +79,6 @@ static inline int32_t clampi(int32_t x, int32_t lo, int32_t hi) { return x < lo 
 static inline int32_t knob(const int16_t *k, int i) { return k[i] < 0 ? 0 : k[i]; }
 #define UNLIKELY(x) __builtin_expect(!!(x), 0)
 static inline uint32_t lcg(uint32_t *s) { return *s = *s * 1664525u + 1013904223u; }
-static inline int32_t sine(uint32_t ph) { return OP1_SINE_TABLE[ph >> 19]; }   /* 8192-entry table, Q15 */
 /* a 16 x 16 product: one cycle on the Blackfin, where an int32 product is a 3-cycle 32 x 32 multiply. Both operands
  * must fit int16 (the comment at each use says why); the host test builds check it on every call */
 static inline int32_t m16(int32_t a, int32_t b)
@@ -88,6 +87,24 @@ static inline int32_t m16(int32_t a, int32_t b)
     if (a != (int16_t)a || b != (int16_t)b) __builtin_trap();
 #endif
     return (int32_t)(int16_t)a * (int16_t)b;
+}
+
+/* sin(2 pi ph / 2^32), Q15, computed rather than read: a 7th-order odd polynomial over the quarter turn, folded (Q14
+ * coefficients; within 8 LSB of the exact sine, closer than the 8192-entry table's own phase steps, 26 LSB). The
+ * audio no longer reads the sine table: on the OP-1 each 32-byte line of ordinary memory an audio block touches costs
+ * ~107 cycles, and the bells, the flute pair and the sub-octave stepped across the 16 KB table, up to ~120 lines a
+ * voice a block. Five 16 x 16 products instead (all operands within int16: u, u2 <= 16384, |p| <= 25736) */
+static inline int32_t sine(uint32_t ph)
+{
+    const int32_t t = (int32_t)(ph >> 16);
+    int32_t u = t & 16383;
+    if (t & 16384) u = 16384 - u;                                         /* the quarter's mirror: 0 .. 16384 */
+    const int32_t u2 = m16(u, u) >> 14;
+    int32_t p = 1306 + (m16(-77, u2) >> 14);
+    p = -10583 + (m16(p, u2) >> 14);
+    p = 25736 + (m16(p, u2) >> 14);
+    const int32_t y = clampi(m16(p, u) >> 13, 0, 32767);
+    return t & 32768 ? -y : y;
 }
 
 /* a 5-point table over a knob (0..32767): t[0] at 0 %, t[4] at 100 %; entries within +-65535 */
@@ -314,12 +331,31 @@ typedef struct {
     uint8_t held, fresh, retrig;   /* retrig: the last note_on came while the voice still sounded */
 } voice_t;
 
-static voice_t V[NV];
+/* The voices' state and the render's scratch live here unless the host gives them better memory (hs_use_memory: the
+ * Opus build puts the voices in its audio pool and the scratch in fast memory, both before any audio runs) */
+static voice_t V_mem[NV];
 /* scratch for the voice being rendered (render is never re-entered: one audio interrupt) */
-static int32_t bodyb[HB];        /* the body combs' output */
-static int32_t roomb[QB];        /* the room at 11.025 kHz */
-static int32_t bellw[QB];        /* the bells' sum at 11.025 kHz */
+typedef struct {
+    int32_t hb[HB];              /* the voice at 22.05 kHz */
+    int32_t bodyb[HB];           /* the body combs' output */
+    int32_t roomb[QB];           /* the room at 11.025 kHz */
+    int32_t bellw[QB];           /* the bells' sum at 11.025 kHz */
+} scratch_t;
+static scratch_t S_mem;
+static voice_t *V = V_mem;
+static int32_t *hb = S_mem.hb, *bodyb = S_mem.bodyb, *roomb = S_mem.roomb, *bellw = S_mem.bellw;
 static const int32_t bellb[QB];  /* silence, read while no bell rings */
+/* voices: NV voice_t, zeroed (or 0: keep V_mem); scratch: a scratch_t, need not be cleared (or 0) */
+#define HS_VOICES_BYTES  ((unsigned)sizeof V_mem)
+#define HS_SCRATCH_BYTES ((unsigned)sizeof S_mem)
+static void __attribute__((unused)) hs_use_memory(void *voices, void *scratch)
+{
+    if (voices) V = (voice_t *)voices;
+    if (scratch) {
+        scratch_t *sc = (scratch_t *)scratch;
+        hb = sc->hb; bodyb = sc->bodyb; roomb = sc->roomb; bellw = sc->bellw;
+    }
+}
 
 /* shared: block counting (voices render in ascending order, so an index not above the last one starts a new block),
  * each voice's last pitch and the drone owner */
@@ -344,7 +380,6 @@ static volatile int32_t hs_bell_lvl;     /* the last strike's size (Q15) */
 
 /* ---------------------------------------------------------------- the string's loop (section 1 of render) */
 typedef struct { uint32_t pw, doff; int32_t ta, ff, grit, dt, inv8; const int32_t *tmod; } string_t;
-static int32_t hb[HB];           /* the voice at 22.05 kHz (scratch for the voice being rendered) */
 
 /* inlined at four call sites with constant flute / rough, so neither is tested per sample */
 static inline __attribute__((always_inline)) void string_run(voice_t *v, const string_t *st, const int32_t *inc,

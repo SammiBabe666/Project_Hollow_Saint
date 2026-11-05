@@ -2,6 +2,26 @@
 
 Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
 
+## Unreleased: CPU on the OP-1 (CATHEDRAL's bells, the flute pair; Opus 3.2 kit)
+- Measured on the OP-1 (Opus, developer mode): "audio: worst 857629" with CATHEDRAL around 50 %, over the whole
+  580,525-cycle audio block, so the audio overran and clicked. The kit's rule: each 32-byte line of ordinary memory an
+  audio block touches costs ~107 cycles, twice that while the display sends a frame. The engine's own work is ~25k
+  cycles a voice in the simulator; the rest was memory.
+- **The sine is computed, not read.** The bells (struck from just above 50 % CATHEDRAL), the flute pair (low STRINGS)
+  and the sub-octave stepped across the 16 KB sine table: up to 120-210 lines a voice a block. `sine()` is now a
+  folded 7th-order polynomial, five 16 x 16 products, within 8 LSB of the exact sine (the table's own phase steps
+  were 26 LSB off). Host model (lackey trace, distinct lines per audio block x 107): ~78-85k -> ~34k cycles. The
+  screen still uses the table.
+- **Opus: the voices in the audio pool, the scratch in fast memory.** `opl_init` asks `opus_alloc_audio` for the six
+  voices' state (~13 KB, the pool the display does not share) and `opus_fast` for the render's scratch (768 bytes, L1),
+  through the engine's new `hs_use_memory`; without them the static memory serves. The manifest's `core` is 2.8 (for
+  `opus_alloc_audio`), which the Opus 3.2 kit's core 2.13 covers.
+- Sound: renders that use no sine are byte-identical to the declick release (phrase, single, chord6, range, sweeps of
+  CATHEDRAL and WHEEL BUZZ, steal, vibrato, handover, tail). Elsewhere within 3-24 LSB (-60 to -79 dB); with the Lo-Fi
+  Relic the tape's wow drifts the phase slowly apart from the old render (-34 to -52 dB difference), not its tone.
+- Host cost (x86 instructions a voice block) rises ~20-35 % where the sine runs (CATHEDRAL 60 %: 19.6k -> 23.4k): the
+  trade for no table traffic. Not measured on the OP-1 yet: cpu.txt still holds the 230000 estimate.
+
 ## Unreleased: declicking (poly, unison, CATHEDRAL)
 - **Re-triggered voices no longer click.** A note_on on a voice that is still sounding (a stolen voice in poly, unison
   re-triggering all six voices on every note, a repeated note) used to restart the string at a random phase with its
