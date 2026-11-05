@@ -12,6 +12,8 @@ a controlled one. Nothing in any project's source was changed for this. Each fil
 | [BUILD_TEST_CHECKLIST.md](BUILD_TEST_CHECKLIST.md) | The repeatable validation run, with computer checks and hardware checks kept apart |
 | [RISK_REGISTER.md](RISK_REGISTER.md) | Compatibility risks with severity, likelihood and what would retire each one |
 | [RECOMMENDATIONS.md](RECOMMENDATIONS.md) | Improvements that can be made now without touching any project's sound or look |
+| [HOLLOW_SAINT_4.0_PLAN.md](HOLLOW_SAINT_4.0_PLAN.md) | Hollow Saint's four 4.0 jobs, ready to run: CPU (with today's simulator and memory figures), removing `toolchain/`, direct Opus code instead of the kennel layer, the four firmware reads |
+| [DEVICE_TEST_SHEET.md](DEVICE_TEST_SHEET.md) | The fill-in sheet for the OP-1: each plugin alone, then four effects plus an engine together |
 | [BASELINE.md](BASELINE.md) | The reference build of every plugin on the current kit, with sizes and SHA-256, to compare Beta 4 builds against |
 
 Two tools come with it, both read-only:
