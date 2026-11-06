@@ -1,6 +1,12 @@
 # Changelog
 
-Each version is a git tag in this repository. Every step was host-tested; none has run on an OP-1 (see README).
+Each version is a git tag in this repository. Every step was host-tested. The first run on an OP-1: the 0.7.8 Opus 2
+`.opmod` works (2026-11-06, below); no other build has been confirmed on the device yet (see README).
+
+## Hardware check: 0.7.8 on Opus 2 (2026-11-06)
+- Sammi ran the released `release/opus/hollow_saint.opmod` (0.7.8, SHA-256 `f0c1d79c…`) on an OP-1 with Opus 2: it
+  works. Not yet recorded: the Opus version and the device's "audio: worst N" (so `cpu.txt` keeps its estimate), and
+  the kennel `.knl`. No code changed.
 
 ## Unreleased: declicking (poly, unison, CATHEDRAL)
 - **Re-triggered voices no longer click.** A note_on on a voice that is still sounding (a stolen voice in poly, unison

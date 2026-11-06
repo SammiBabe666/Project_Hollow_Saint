@@ -4,9 +4,10 @@ Cathedral of the Hollow Saint as an [Opus 2](https://github.com/LizardMan245/opu
 OP-1 on firmware 246. It is the same engine as the kennel `.knl`: `hollow_saint_opus.c` includes
 `plugin/hollow_saint/hollow_saint.c` unchanged, and this folder's `op1_plugin.h` gives it the kennel API on Opus 2.
 
-**Not yet run on an OP-1.** It builds cleanly with the Opus kit, and its audio is bit-identical to the kennel build on
-the PC and in the Blackfin simulator (see the top-level README). The install, the screen and the real CPU load are
-untested.
+**Works on an OP-1** (Sammi, 2026-11-06): the released 0.7.8 `release/opus/hollow_saint.opmod`, SHA-256
+`f0c1d79c6012c24b2cb4ce3d48ec848b11d862f7a73226e0479428b22a2b199c`. It builds cleanly with the Opus kit, and its audio
+is bit-identical to the kennel build on the PC and in the Blackfin simulator (see the top-level README). Still open: the
+device's "audio: worst N" for `cpu.txt` (230,000 is an estimate), and a device run of the unreleased work on `main`.
 
 ## Install
 

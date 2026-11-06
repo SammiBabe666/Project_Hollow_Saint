@@ -8,7 +8,7 @@ Summary:
 
 | Project | Plugin id (kind) | Version | Min core | Image + zero (B) | CPU figure | On an OP-1 under Opus |
 |---|---|---|---|---|---|---|
-| Hollow Saint | `sammi.hollow_saint` (engine "hollow saint") | 0.7.8 released; `main` ahead (declick) | 2.6 | 56,408 + 14,188 | 230,000 est. | never |
+| Hollow Saint | `sammi.hollow_saint` (engine "hollow saint") | 0.7.8 released; `main` ahead (declick) | 2.6 | 56,408 + 14,188 | 230,000 est. | released 0.7.8 `.opmod` works (2026-11-06); main's declick build not confirmed |
 | Bloodmoon | `noladrift.bloodmoon` (engine "bloodmoon") | 1.5.2 in repo; **1.5.3 local only** | 2.6 | 50,380 + 732 | 120,000 est. | 1.5.0/1.5.1 switched off for CPU; 1.5.2 not tried |
 | Erdtree | `sammi.erdtree` (engine "erdtree") | 0.6.1 | 2.8 | 47,664 + 504 | 200,000 est. | 0.6.0 loaded, silent (CPU guard); 0.6.1 not tried |
 | Sister | `sammi.sister` (effect "dark sister") | 1.1.1 | 2.0 | 50,976 + 460 | 96,000 est. | never |
