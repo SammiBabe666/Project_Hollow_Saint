@@ -41,8 +41,9 @@ Install it as below ([Install](#install)). Building it yourself is optional; tha
 | **Loader**: the core's own loader code (`kn_load.c`) and the reference loader accept it and relocate it to identical images at two addresses; structure matches a known-good plugin (`erdtree.knl`) | **passes** |
 | **The compiled Blackfin code, run** in the Blackfin instruction-set simulator at the firmware's fixed addresses: audio bit-identical to the host-tested build (184,320 samples, Lo-Fi Relic included) | **passes** |
 | **Opus 2 `.opmod`** built with the Opus plugin kit (`plugin_tool.py build`: every warning an error, imports checked); its audio bit-identical to the kennel build on the PC (ASan + UBSan) and as compiled Blackfin code in the simulator (`results/opus_results.md`) | **passes** |
-| Loaded in the Workshop / OP1-Emulator / on Opus 2 | not done |
-| **Tested on OP-1 hardware** | **not done** |
+| Loaded in the Workshop / OP1-Emulator | not done |
+| **On an OP-1 with Opus 2**: the released 0.7.8 `.opmod` (SHA-256 `f0c1d79c…`) | **works** (Sammi, 2026-11-06); CPU figure not yet recorded |
+| **Tested on OP-1 hardware** | **Opus 2 `.opmod` 0.7.8: works** (2026-11-06); the kennel `.knl` through the Workshop: not done |
 
 Nothing here claims more than the table says. The simulator runs the engine's code, not the OP-1's firmware, so the
 Workshop install, the screen on the real display and playing on the instrument are still untested. Details:
@@ -253,8 +254,9 @@ at most 60 in the loop it calls (EVA's render 740, MBIRA's 800).
 - **Preset stroke rates moved** in 0.7.0 (7 zones instead of 5): the 8 presets were rewritten for it; a patch saved
   with 0.6 keeps its word but may land on a neighbouring rate.
 
-- **Not yet run on an OP-1 or loaded through the Workshop.** The package, the loader checks and the compiled code are
-  verified on the PC and in the Blackfin simulator; the install, the real screen and the real CPU load are not.
+- **On hardware: the Opus 2 `.opmod` 0.7.8 works on an OP-1** (Sammi, 2026-11-06). Its CPU figure on the device
+  (`cpu.txt`, still the 230,000 estimate) is not yet measured. The kennel `.knl` has not been loaded through the
+  Workshop. The unreleased declick work on `main` is a separate build and has not been confirmed on the device.
 - **The drone needs a sounding note.** The OP-1 gives an engine only its voices, each multiplied by its own envelope
   after render, so no engine can run a drone on its own. The drone sounds while any note sounds, follows its owner's
   envelope, and stops when the last release ends. A fixed key ignores octave, transpose and global tune.
