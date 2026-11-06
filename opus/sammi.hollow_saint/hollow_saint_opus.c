@@ -9,6 +9,8 @@
  *     (5, 6 or 7) with opus_engine_knob_set, so it is kept with the sound;
  *   - the screen: hollow_saint.svg is carried inside the plugin (hs_svg.h), written to the plugin's folder with
  *     opus_art_text and shown as the engine's own OS screen (svg, screen_init, screen_draw: core 2.6);
+ *   - memory the audio touches every block: the voices in the audio pool, the render's scratch in fast memory
+ *     (opus_alloc_audio and opus_fast, core 2.8);
  *   - memset and memcpy, in case the compiler calls them (the core exports neither; kennel builds with
  *     -fno-tree-loop-distribute-patterns instead, and the Opus kit's flags are fixed). A "#pragma GCC optimize" for
  *     that flag would apply to the whole engine and cost it ~10 % in the simulator, so only these two get it, so
@@ -174,6 +176,11 @@ static struct opus_engine HOLLOW_SAINT = {
 int opl_init(struct opl_self *self)
 {
     me = self;
+    /* memory the audio touches every block (each 32-byte line of ordinary memory an audio block touches costs ~107
+     * cycles on the OP-1, about twice that while the display sends a frame): the voices (~13 KB) from the audio pool,
+     * which the display does not share; the render's scratch (768 bytes) in fast memory (L1, no cache misses). Without
+     * either, the engine's own static memory serves (the same sound, only slower) */
+    hs_use_memory(opus_alloc_audio(self, HS_VOICES_BYTES), opus_fast(self, HS_SCRATCH_BYTES));
     if (opus_art_text(self, HS_SVG_NAME, HS_SVG, sizeof HS_SVG - 1) < 0) {
         HOLLOW_SAINT.svg = 0;                          /* no file: the plain page instead of the screen */
         HOLLOW_SAINT.screen_init = 0;
